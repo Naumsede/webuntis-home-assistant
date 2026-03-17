@@ -1,6 +1,7 @@
 # week-planner-card configuration for WebUntis timetable
 # Requires: https://github.com/FamousWolf/week-planner-card (install via HACS)
-# Requires: https://github.com (for width and color styling)
+# Requires: https://github.com/thomasloven/lovelace-card-mod (install via HACS)
+
 
 type: custom:week-planner-card
 title: "Student Timetable"
@@ -49,6 +50,10 @@ card_mod:
       flex: 1 1 0px !important;
       min-width: 0 !important;
       padding: 2px !important;
+    }
+    .event-name {
+      font-size: 0.9rem !important;
+      line-height: 1.1 !important;
     }
 
     /* Subject color coding - adjust strings to match your school's subjects */
