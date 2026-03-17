@@ -34,7 +34,20 @@ texts:
   yesterday: gestern
   noEvents: schulfrei
 card_mod:
-  style: >
+  style: |
+    ha-card {
+      max-width: 100% !important;
+      width: 100% !important;
+    }
+    .days {
+      display: flex !important;
+      gap: 4px !important;
+    }
+    .day {
+      flex: 1 1 0px !important;
+      min-width: 0 !important;
+      padding: 2px !important;
+    }
     /* Subject color coding - adjust to match your school's subjects */
     .event[data-summary*="Mathematik"],
     .event[data-summary*="Deutsch"],
