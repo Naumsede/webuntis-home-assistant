@@ -1,9 +1,10 @@
 # week-planner-card configuration for WebUntis timetable
 # Requires: https://github.com/FamousWolf/week-planner-card (install via HACS)
+# Requires: https://github.com (for width and color styling)
 
 type: custom:week-planner-card
 title: "Student Timetable"
-startingDay: saturday
+startingDay: Saturday
 startingDayOffset: "2"
 calendars:
   - entity: calendar.your_local_calendar   # replace with your local calendar entity
@@ -35,6 +36,7 @@ texts:
   noEvents: schulfrei
 card_mod:
   style: |
+    /* Optimization for full-width dashboard layout */
     ha-card {
       max-width: 100% !important;
       width: 100% !important;
@@ -48,7 +50,8 @@ card_mod:
       min-width: 0 !important;
       padding: 2px !important;
     }
-    /* Subject color coding - adjust to match your school's subjects */
+
+    /* Subject color coding - adjust strings to match your school's subjects */
     .event[data-summary*="Mathematik"],
     .event[data-summary*="Deutsch"],
     .event[data-summary*="Biologie"],
@@ -96,6 +99,7 @@ card_mod:
       border-color: rgba(218, 165, 32, 0.7) !important;
       background-color: rgba(218, 165, 32, 0.5) !important;
     }
+
     /* Invisible placeholder events (keeps row heights consistent) */
     .event[data-summary=" "] {
       opacity: 0 !important;
