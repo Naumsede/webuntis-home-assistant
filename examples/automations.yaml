@@ -1,0 +1,54 @@
+# Automations for WebUntis HA integration
+
+# Morning refresh (Mon-Fri at 6 AM)
+- alias: "WebUntis Morning Refresh"
+  triggers:
+    - trigger: time
+      at: "06:00:00"
+  conditions:
+    - condition: time
+      weekday: [mon, tue, wed, thu, fri]
+  actions:
+    - action: homeassistant.update_entity
+      target:
+        entity_id:
+          - sensor.webuntis_changes_student1
+          # - sensor.webuntis_changes_student2
+  mode: single
+
+# Timetable change notification
+- alias: "WebUntis Timetable Changes"
+  triggers:
+    - entity_id: sensor.webuntis_changes_student1
+      trigger: state
+  conditions: []
+  actions:
+    - data:
+        title: "📅 Timetable Change"
+        message: >-
+          {% set items = state_attr('sensor.webuntis_changes_student1', 'items') %}
+          {% if items and items | count > 0 %}
+          {% for i in items %}{{ i.day }}: {{ i.text }}{{ '\n' if not loop.last }}{% endfor %}
+          {% else %}
+          No changes this week.
+          {% endif %}
+      action: notify.notify
+  mode: single
+
+# School messages notification
+- alias: "WebUntis New Messages"
+  triggers:
+    - entity_id: sensor.webuntis_messages
+      trigger: state
+  conditions:
+    - condition: template
+      value_template: >
+        {{ trigger.to_state.state | int > trigger.from_state.state | int }}
+  actions:
+    - data:
+        title: "📢 New School Message"
+        message: >-
+          {% set items = state_attr('sensor.webuntis_messages', 'items') %}
+          {% for m in items %}{{ m.text }}{{ '\n' if not loop.last }}{% endfor %}
+      action: notify.notify
+  mode: single

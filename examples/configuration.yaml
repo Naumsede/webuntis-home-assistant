@@ -1,0 +1,42 @@
+# configuration.yaml
+# Add these command_line sensors for each student and for the news feed.
+# Adjust entity names and script paths to match your setup.
+
+command_line:
+
+  # Timetable sensor — student 1
+  # State = number of changes this week
+  # Attributes: items (list of changes), events (total event count)
+  - sensor:
+      name: "WebUntis Changes Student1"
+      unique_id: webuntis_changes_student1
+      command: "python3 /config/scripts/webuntis_calendar_student1.py"
+      scan_interval: 7200   # every 2 hours
+      command_timeout: 60
+      value_template: "{{ value_json.changes }}"
+      json_attributes:
+        - items
+        - events
+
+  # Timetable sensor — student 2 (if applicable)
+  - sensor:
+      name: "WebUntis Changes Student2"
+      unique_id: webuntis_changes_student2
+      command: "python3 /config/scripts/webuntis_calendar_student2.py"
+      scan_interval: 7200
+      command_timeout: 60
+      value_template: "{{ value_json.changes }}"
+      json_attributes:
+        - items
+        - events
+
+  # Daily school messages sensor
+  - sensor:
+      name: "WebUntis Nachrichten"
+      unique_id: webuntis_nachrichten
+      command: "python3 /config/scripts/webuntis_newsfeed.py"
+      scan_interval: 1800   # every 30 minutes
+      command_timeout: 30
+      value_template: "{{ value_json.count }}"
+      json_attributes:
+        - items

@@ -1,0 +1,14 @@
+type: markdown
+title: 📢 School Messages Today
+content: |
+  {% set msgs = state_attr('sensor.webuntis_messages', 'items') %}
+  {% if msgs and msgs | count > 0 %}
+  {% for m in msgs %}
+  {{ m.text }}{% if not loop.last %}
+
+  ---
+  {% endif %}
+  {% endfor %}
+  {% else %}
+  No messages today.
+  {% endif %}
