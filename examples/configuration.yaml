@@ -1,28 +1,54 @@
 # Add to your configuration.yaml
-# Adjust entity names and script paths to match your setup
+# Adjust entity names, script paths and credentials to match your setup
+
+# ── OPTION A: Credentials as environment variables (more secure) ─────────────
+# Pass credentials directly in the command - nothing stored in the script file.
+# Use single quotes around values to handle special characters.
 
 command_line:
-  # Timetable sensor - writes ICS calendar and exposes change count + details
   - sensor:
       name: "WebUntis Changes Student1"
       unique_id: webuntis_changes_student1
-      command: "python3 /config/scripts/webuntis_calendar.py"
-      scan_interval: 7200        # refresh every 2 hours
+      command: >
+        WEBUNTIS_USER='your@email.com'
+        WEBUNTIS_PASSWORD='yourpassword'
+        WEBUNTIS_SERVER='your-school.webuntis.com'
+        WEBUNTIS_SCHOOL='your-school'
+        python3 /config/scripts/webuntis_calendar.py
+      scan_interval: 7200
       command_timeout: 60
-      value_template: "{{ value_json.changes }}"
+      value_template: "{{ value_json.changes | default(0) }}"
       json_attributes:
         - items
         - events
 
-  # Add more students by copying the block above and adjusting the script path
-
-  # Daily school messages sensor
   - sensor:
       name: "WebUntis Messages"
       unique_id: webuntis_messages
-      command: "python3 /config/scripts/webuntis_newsfeed.py"
-      scan_interval: 3600        # refresh every 60 minutes
+      command: >
+        WEBUNTIS_USER='your@email.com'
+        WEBUNTIS_PASSWORD='yourpassword'
+        WEBUNTIS_SERVER='your-school.webuntis.com'
+        WEBUNTIS_SCHOOL='your-school'
+        python3 /config/scripts/webuntis_newsfeed.py
+      scan_interval: 1800
       command_timeout: 30
-      value_template: "{{ value_json.count }}"
+      value_template: "{{ value_json.count | default(0) }}"
       json_attributes:
         - items
+
+# ── OPTION B: Credentials hardcoded in script (simpler, less secure) ─────────
+# Edit USERNAME/PASSWORD/SERVER/SCHOOL directly in the script files.
+# Make sure the scripts are not publicly accessible.
+
+# command_line:
+#   - sensor:
+#       name: "WebUntis Changes Student1"
+#       unique_id: webuntis_changes_student1
+#       command: "python3 /config/scripts/webuntis_calendar.py"
+#       scan_interval: 7200
+#       command_timeout: 60
+#       value_template: "{{ value_json.changes | default(0) }}"
+#       json_attributes:
+#         - items
+#         - events

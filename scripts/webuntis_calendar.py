@@ -4,21 +4,26 @@ WebUntis → HA Local Calendar
 Fetches current + next week timetable and writes it as an ICS file
 to a Home Assistant local calendar.
 
-Configuration: edit the YOUR CONFIGURATION section below.
-Requirements: pip3 install requests --break-system-packages
+Configuration:
+  Pass credentials as environment variables (recommended):
+    WEBUNTIS_USER, WEBUNTIS_PASSWORD, WEBUNTIS_SERVER, WEBUNTIS_SCHOOL
+  Set STUDENT_ID, ICS_PATH, CAL_ID, CAL_NAME in the YOUR CONFIGURATION section.
+
+Requirements:
+  pip3 install requests --break-system-packages
 """
-import requests, json, sys, re, hashlib
+import requests, json, sys, re, hashlib, os
 from datetime import date, timedelta, datetime, timezone
 
 # ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
-USERNAME   = "your@email.com"           # WebUntis login email
-PASSWORD   = "yourpassword"             # WebUntis password
-SERVER     = "your-school.webuntis.com" # WebUntis server hostname
-SCHOOL     = "your-school"              # school name (from login URL)
-STUDENT_ID = 12345                      # from /api/rest/view/v1/app/data -> user.students
+USERNAME   = os.getenv("WEBUNTIS_USER")     # set via environment variable
+PASSWORD   = os.getenv("WEBUNTIS_PASSWORD") # set via environment variable
+SERVER     = os.getenv("WEBUNTIS_SERVER")   # set via environment variable
+SCHOOL     = os.getenv("WEBUNTIS_SCHOOL")   # set via environment variable
+STUDENT_ID = 12345                          # from find_student_ids.py
 ICS_PATH   = "/config/.storage/local_calendar.your_calendar.ics"
-CAL_ID     = "student1"                 # unique string for stable UIDs (no spaces)
-CAL_NAME   = "Timetable"                # calendar display name
+CAL_ID     = "student1"                     # unique string for stable UIDs
+CAL_NAME   = "Timetable"                    # calendar display name
 # ─────────────────────────────────────────────────────────────────────────────
 
 DAYS_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -169,7 +174,6 @@ def parse_entry(raw):
         "room_removed":    room_removed,
         "status":          raw.get("status", "REGULAR"),
         "note":            raw.get("substitutionText", "").strip(),
-        "_ids":            raw.get("ids", []),
     }
 
 
@@ -286,8 +290,7 @@ try:
 
             for start, end in slots:
                 # Stable UID based on WebUntis internal ID (survives content changes)
-                webuntis_id = str(entry["_ids"][0]) if entry["_ids"] else start
-                uid = stable_uid(webuntis_id + "-" + CAL_ID)
+                uid = stable_uid(str(raw.get("ids", [start])[0]) + "-" + CAL_ID)
                 ics_lines += [
                     "BEGIN:VEVENT",
                     f"UID:{uid}",

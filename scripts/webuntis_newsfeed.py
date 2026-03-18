@@ -4,19 +4,23 @@ WebUntis → HA Sensor (Daily School Messages)
 Fetches today's school messages and outputs JSON for a command_line sensor.
 
 Note: WebUntis messages are only available via HTML scraping of the "Today" page.
-      The JSON-RPC API does not expose daily messages.
+      The JSON-RPC API does NOT expose daily messages.
 
-Configuration: edit the YOUR CONFIGURATION section below.
-Requirements: pip3 install requests --break-system-packages
+Configuration:
+  Pass credentials as environment variables (recommended):
+    WEBUNTIS_USER, WEBUNTIS_PASSWORD, WEBUNTIS_SERVER, WEBUNTIS_SCHOOL
+
+Requirements:
+  pip3 install requests --break-system-packages
 """
-import requests, json, sys, re
+import requests, json, sys, re, os
 from html import unescape
 
 # ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
-USERNAME = "your@email.com"
-PASSWORD = "yourpassword"
-SERVER   = "your-school.webuntis.com"
-SCHOOL   = "your-school"
+USERNAME = os.getenv("WEBUNTIS_USER")
+PASSWORD = os.getenv("WEBUNTIS_PASSWORD")
+SERVER   = os.getenv("WEBUNTIS_SERVER")
+SCHOOL   = os.getenv("WEBUNTIS_SCHOOL")
 # ─────────────────────────────────────────────────────────────────────────────
 
 session = requests.Session()
@@ -44,6 +48,7 @@ try:
     )
 
     # Step 3: Extract messagesOfDay from data-dojo-props attribute
+    # Note: &#034; is the HTML entity for " - must be matched before unescape()
     match = re.search(
         r'data-dojo-type="grupet/widget/app/MessageOfDayList"\s+data-dojo-props="([^"]*(?:&#034;[^"]*)*)"',
         resp.text
