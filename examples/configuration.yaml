@@ -21,7 +21,7 @@ command_line:
       name: "WebUntis Messages"
       unique_id: webuntis_messages
       command: "python3 /config/scripts/webuntis_newsfeed.py"
-      scan_interval: 1800        # refresh every 30 minutes
+      scan_interval: 3600        # refresh every 60 minutes
       command_timeout: 30
       value_template: "{{ value_json.count }}"
       json_attributes:
