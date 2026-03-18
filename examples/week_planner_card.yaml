@@ -1,11 +1,9 @@
 # week-planner-card configuration for WebUntis timetable
 # Requires: https://github.com/FamousWolf/week-planner-card (install via HACS)
-# Requires: https://github.com/thomasloven/lovelace-card-mod (install via HACS)
-
 
 type: custom:week-planner-card
 title: "Student Timetable"
-startingDay: Saturday
+startingDay: saturday
 startingDayOffset: "2"
 calendars:
   - entity: calendar.your_local_calendar   # replace with your local calendar entity
@@ -17,14 +15,14 @@ days: "5"
 hideWeekend: true
 combineSimilarEvents: false
 showDescription: false
-showLocation: true
+showLocation: true            # shows room number below event title
 showTitle: true
 compact: false
 showLegend: false
 maxEvents: "0"
 hidePastEvents: false
 legendToggle: false
-locale: de-DE
+locale: de-DE                 # German month/day names (adjust to your locale)
 weather:
   entity: weather.forecast_home   # replace with your weather entity
   showCondition: true
@@ -36,27 +34,8 @@ texts:
   yesterday: gestern
   noEvents: schulfrei
 card_mod:
-  style: |
-    /* Optimization for full-width dashboard layout */
-    ha-card {
-      max-width: 100% !important;
-      width: 100% !important;
-    }
-    .days {
-      display: flex !important;
-      gap: 4px !important;
-    }
-    .day {
-      flex: 1 1 0px !important;
-      min-width: 0 !important;
-      padding: 2px !important;
-    }
-    .event-name {
-      font-size: 0.9rem !important;
-      line-height: 1.1 !important;
-    }
-
-    /* Subject color coding - adjust strings to match your school's subjects */
+  style: >
+    /* Subject color coding - adjust subjects and colors to match your school */
     .event[data-summary*="Mathematik"],
     .event[data-summary*="Deutsch"],
     .event[data-summary*="Biologie"],
@@ -104,7 +83,6 @@ card_mod:
       border-color: rgba(218, 165, 32, 0.7) !important;
       background-color: rgba(218, 165, 32, 0.5) !important;
     }
-
     /* Invisible placeholder events (keeps row heights consistent) */
     .event[data-summary=" "] {
       opacity: 0 !important;

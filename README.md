@@ -2,165 +2,205 @@
 
 An alternative approach to integrating WebUntis timetable data into Home Assistant — using the **internal browser REST API** instead of the official JSON-RPC API.
 
-> ⚠️ **Caution:** This project uses an **undocumented, internal WebUntis API**. It may break without notice if Untis GmbH changes their backend. Use at your own risk.
+> ⚠️ **Caution:** This project uses WebUntis' **undocumented internal REST API**. It may break without notice if Untis GmbH changes their backend. Use at your own risk. Credentials are stored in plain text in the script – consider using `secrets.yaml` in production. **Never commit credentials to a public repository.**
 
 ---
 
 ## Why this approach?
 
-The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassistant-WebUntis) integration uses the public JSON-RPC API. This API is limited:
+The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassistant-WebUntis) integration uses the public JSON-RPC API which has significant limitations:
 
-- No teacher substitution details (only a generic "changed" flag)
-- No substitution text / notes
-- No daily school messages
-
-This project uses the same REST API that the WebUntis browser interface uses:
-
-| Feature | JSON-RPC API | This project |
+| Feature | JSON-RPC API (official) | REST API (this project) |
 |---|---|---|
+| Teacher substitution details | ❌ Only "changed" | ✅ Fr → Ar |
+| Substitution text | ❌ | ✅ e.g. "Känguruwettbewerb" |
 | Lesson cancellation | ✅ | ✅ |
-| Room change | ✅ | ✅ |
-| Teacher substitution detail | ❌ | ✅ `Fr → Ar` |
-| Substitution text | ❌ | ✅ `Känguruwettbewerb` |
+| Room changes | ✅ | ✅ with old/new room |
 | Daily school messages | ❌ | ✅ |
+| Dynamic time grid | ❌ | ✅ loaded from API |
 
 ---
 
-## How it works
+## Features
 
-### Authentication flow
+- 📅 Full weekly timetable written to a local HA calendar (ICS)
+- ⚠️ Teacher substitutions: `Fr → Ar`
+- ❌ Cancellations with strikethrough styling
+- 🏫 Room changes: `TU3 → 043`
+- 📝 Substitution text in event title
+- 📢 Daily school messages as HA sensor
+- 🔔 Push notifications on new changes only (no duplicates)
+- 🕐 Dynamic time grid loaded from API (no hardcoded periods)
+- 🌍 Correct DST handling via VTIMEZONE block
+- 🔑 Stable UIDs via WebUntis internal IDs
+- 📦 No external dependencies beyond `requests`
 
+---
+
+## ⚠️ Security Note
+
+Your WebUntis credentials are stored in the script files. For better security, use HA's `secrets.yaml`:
+
+```yaml
+# secrets.yaml
+webuntis_username: your@email.com
+webuntis_password: yourpassword
 ```
-1. POST /WebUntis/j_spring_security_check  →  JSESSIONID cookie
-2. GET  /WebUntis/api/token/new            →  JWT Bearer token (raw string)
+
+**Never commit credentials to a public repository.**
+
+---
+
+## Prerequisites
+
+- Home Assistant with `local_calendar` integration enabled
+- Python 3 on your HA host (via Terminal & SSH add-on)
+- `requests` library:
+  ```bash
+  pip3 install requests --break-system-packages
+  ```
+
+---
+
+## Authentication Flow
+
+WebUntis uses a two-step authentication for the REST API:
+
+**Step 1 – Web Login (gets JSESSIONID cookie)**
+```python
+session.post(
+    f"https://{SERVER}/WebUntis/j_spring_security_check",
+    data={"j_username": USERNAME, "j_password": PASSWORD,
+          "school": SCHOOL, "token": csrf_token}
+)
 ```
 
-The JWT token is passed as `Authorization: Bearer <token>` in all REST calls.
+**Step 2 – JWT Bearer Token**
+```python
+# Returns raw JWT string (not JSON-wrapped)
+jwt = session.get(f"https://{SERVER}/WebUntis/api/token/new").text.strip()
+```
 
-### Key endpoints
+**Step 3 – REST API calls**
+```python
+headers = {
+    "Authorization": f"Bearer {jwt}",
+    "tenant-id":     tenant_id,  # loaded dynamically from app/data
+}
+```
 
+---
+
+## Key API Endpoints
+
+### App Data (tenant ID, time grid, student IDs)
 ```
 GET /WebUntis/api/rest/view/v1/app/data
-    → tenant ID, time grid, student IDs
-
-GET /WebUntis/api/rest/view/v1/timetable/entries
-    ?start=YYYY-MM-DD&end=YYYY-MM-DD&format=2
-    &resourceType=STUDENT&resources=<student_id>
-    &periodTypes=&timetableType=MY_TIMETABLE&layout=START_TIME
-    → full timetable with change details
-
-GET /WebUntis/main.do
-    → daily school messages (embedded in HTML)
 ```
 
-### Timetable entry structure
+### Timetable Entries
+```
+GET /WebUntis/api/rest/view/v1/timetable/entries
+    ?start=YYYY-MM-DD&end=YYYY-MM-DD
+    &format=2&resourceType=STUDENT&resources=<student_id>
+    &periodTypes=&timetableType=MY_TIMETABLE&layout=START_TIME
+```
 
+Example entry with teacher substitution:
 ```json
 {
   "status": "CHANGED",
+  "ids": [2600142],
+  "duration": {"start": "2026-03-16T08:40", "end": "2026-03-16T09:25"},
   "position1": [{
     "current": {"shortName": "Ar", "status": "ADDED"},
     "removed": {"shortName": "Fr", "status": "REMOVED"}
   }],
   "position2": [{"current": {"longName": "Englisch"}}],
   "position3": [{"current": {"shortName": "043"}}],
-  "substitutionText": "Aufgaben Fr",
-  "duration": {"start": "2026-03-16T08:40", "end": "2026-03-16T09:25"}
+  "substitutionText": "Aufgaben Fr"
 }
 ```
 
----
+Status values: `REGULAR`, `CHANGED`, `CANCELLED`
 
-## What you get
-
-- **Local HA calendar** with full timetable for this + next week
-  - `⚠️ Englisch: Fr→Ar (Aufgaben Fr)` — teacher substitution with note
-  - `❌ Englisch fällt aus` — cancellation (strikethrough via CSS)
-  - `⚠️ Sport: Raum: TU3→043 (Känguruwettbewerb)` — room change with note
-- **`command_line` sensor** with count and list of current changes
-- **Push notification** when changes are detected
-- **Daily school messages** as a sensor and Lovelace card
+### Daily School Messages
+```
+GET /WebUntis/main.do
+```
+Messages are embedded in the HTML – parsed from `data-dojo-props` of `grupet/widget/app/MessageOfDayList`. The JSON-RPC API does **not** expose daily messages.
 
 ---
 
-## Prerequisites
+## Finding Your Configuration Values
 
-- Home Assistant (tested on HA OS 2026.3)
-- Python 3 on your HA host
-- A WebUntis parent/guardian or student account
-- [week-planner-card](https://github.com/FamousWolf/week-planner-card) from HACS
-- Scripts placed in `/config/scripts/`
+**Server & School name** – from your WebUntis URL:
+```
+https://YOUR-SERVER.webuntis.com/WebUntis/?school=YOUR-SCHOOL
+```
+
+**Student IDs & Tenant ID** – run the helper script:
+```bash
+python3 scripts/find_student_ids.py
+```
 
 ---
 
 ## Setup
 
-### 1. Find your credentials
+1. **Enable Local Calendar** in `configuration.yaml`:
+   ```yaml
+   local_calendar:
+   ```
+   Then create a calendar per student under Settings → Integrations → Local Calendar.
 
-- **Server**: hostname of your school's WebUntis instance (e.g. `myschool.webuntis.com`)
-- **School**: school slug visible in the URL after login
-- **Username / Password**: your WebUntis login
+2. **Find ICS path** – create a test event via HA UI, then:
+   ```bash
+   ls /config/.storage/local_calendar*.ics
+   ```
 
-### 2. Find Student ID and Tenant ID
+3. **Configure scripts** – copy from `scripts/` to `/config/scripts/` and edit the configuration section at the top of each file.
 
-Run `scripts/find_ids.py` once after filling in your credentials.
+4. **Test:**
+   ```bash
+   python3 /config/scripts/webuntis_calendar.py
+   python3 /config/scripts/webuntis_newsfeed.py
+   ```
+   Expected output:
+   ```json
+   {"status": "ok", "events": 42, "changes": 3, "items": [...]}
+   ```
 
-### 3. Store credentials securely
+5. **Add sensors** – see `examples/configuration.yaml`
 
-> ⚠️ **Security note:** Never commit credentials to version control. The example scripts use inline variables for simplicity — store passwords in HA's `secrets.yaml` in production.
+6. **Add automations** – see `examples/automations.yaml`
 
-```yaml
-# secrets.yaml
-webuntis_username: "your@email.com"
-webuntis_password: "yourpassword"
-```
-
-### 4. Create a local calendar in HA
-
-**Settings → Integrations → Local Calendar** → Add a calendar per student.
-Create one event to initialize the ICS file, then note the path:
-```
-/config/.storage/local_calendar.<calendar_name>.ics
-```
-
-### 5. Configure the scripts
-
-Copy `scripts/webuntis_calendar.py` for each student and set:
-
-```python
-USERNAME   = "your@email.com"
-PASSWORD   = "yourpassword"
-SERVER     = "yourschool.webuntis.com"
-SCHOOL     = "yourschool"
-STUDENT_ID = 12345        # from find_ids.py
-ICS_PATH   = "/config/.storage/local_calendar.student_calendar.ics"
-CAL_ID     = "student1"   # unique string for stable UIDs
-CAL_NAME   = "Student Timetable"
-```
-
-### 6. Configure HA sensors and automations
-
-See `examples/configuration.yaml` and `examples/automations.yaml`.
-
-### 7. Add Lovelace cards
-
-See `examples/lovelace_timetable.yaml` and `examples/lovelace_messages.yaml`.
+7. **Add Lovelace cards** – see `examples/week_planner_card.yaml` and `examples/messages_card.yaml`
 
 ---
 
 ## Limitations
 
-- Uses an **undocumented internal API** — may break with WebUntis updates
-- Tested with a **Legal Guardian** account (`LEGAL_GUARDIAN` role)
-- Tested on a German school WebUntis instance (Schleswig-Holstein)
-- The time grid is loaded dynamically from the API
-- Placeholder events (invisible, for consistent card heights in week-planner-card) are written to the calendar
+- ⚠️ Undocumented API – may break on WebUntis updates
+- 🔄 Writes 2 weeks ahead only
+- 👤 Tested with `LEGAL_GUARDIAN` account type
+- 🏫 Tested on German WebUntis instances (March 2026)
+
+---
+
+## Related
+
+- [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassistant-WebUntis) – official integration using JSON-RPC API
+- [Issue #266](https://github.com/JonasJoKuJonas/homeassistant-WebUntis/issues/266) – our API findings submitted to the official integration
 
 ---
 
 ## Contributing
 
-Pull requests welcome. If you test this with other account types, school configurations, or WebUntis versions, please open an issue.
+Pull requests welcome! Especially:
+- Teacher/student account support (currently tested with legal guardian only)
+- Homework integration (endpoint discovered: `/api/rest/view/v2/calendar-entry/detail`)
+- Additional WebUntis instances tested
 
 ---
 

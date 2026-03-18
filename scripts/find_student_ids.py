@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Helper script to find your student IDs and tenant ID from WebUntis.
+Helper script to find your student IDs, tenant ID and time grid from WebUntis.
 Run this once during setup, then add the IDs to webuntis_calendar.py.
 """
 import requests, json, re
@@ -35,7 +35,7 @@ print("Students:")
 for s in app_data["user"].get("students", []):
     print(f"  {s['displayName']:<30} ID: {s['id']}")
 print()
-print("Time grid:")
+print("Time grid (loaded dynamically by webuntis_calendar.py):")
 for u in app_data["currentSchoolYear"]["timeGrid"]["units"]:
     st, et = u["startTime"], u["endTime"]
     print(f"  Period {u['unitOfDay']}: {st//100:02d}:{st%100:02d} – {et//100:02d}:{et%100:02d}")

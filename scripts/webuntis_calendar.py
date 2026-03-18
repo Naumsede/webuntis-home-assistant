@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-WebUntis → HA Local Calendar (Pauls Stundenplan lokal)
-Schreibt diese + nächste Woche als ICS-Datei.
-- Stundenraster wird dynamisch aus der API geladen
-- Tenant-ID wird dynamisch ermittelt
-- Doppelstunden werden aufgeteilt, lange Events (>120 min) bleiben als Block
-- Platzhalter nur bis zur letzten Stunde des Tages
-- Stabile UIDs via hashlib
-- VTIMEZONE-Block für korrekte Sommerzeit-Behandlung
+WebUntis → HA Local Calendar
+Fetches current + next week timetable and writes it as an ICS file
+to a Home Assistant local calendar.
+
+Configuration: edit the YOUR CONFIGURATION section below.
+Requirements: pip3 install requests --break-system-packages
 """
 import requests, json, sys, re, hashlib
 from datetime import date, timedelta, datetime, timezone
 
-USERNAME   = "your@email.com"
-PASSWORD   = "yourpassword"
-SERVER     = "yourschool.webuntis.com"
-SCHOOL     = "yourschool"
-STUDENT_ID = 12345  # from find_ids.py
-ICS_PATH   = "/config/.storage/local_calendar.student_calendar.ics"
-CAL_ID     = "student1"
-CAL_NAME   = "Student Timetable"
+# ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
+USERNAME   = "your@email.com"           # WebUntis login email
+PASSWORD   = "yourpassword"             # WebUntis password
+SERVER     = "your-school.webuntis.com" # WebUntis server hostname
+SCHOOL     = "your-school"              # school name (from login URL)
+STUDENT_ID = 12345                      # from /api/rest/view/v1/app/data -> user.students
+ICS_PATH   = "/config/.storage/local_calendar.your_calendar.ics"
+CAL_ID     = "student1"                 # unique string for stable UIDs (no spaces)
+CAL_NAME   = "Timetable"                # calendar display name
+# ─────────────────────────────────────────────────────────────────────────────
 
 DAYS_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
@@ -44,11 +44,13 @@ END:VTIMEZONE"""
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
 
+
 def stable_uid(key):
     return hashlib.md5(key.encode()).hexdigest()
 
+
 def periods_from_units(units):
-    """Stundenraster aus API-Daten (startTime/endTime als int, z.B. 750 = 07:50)"""
+    """Convert WebUntis time grid (e.g. 750 = 07:50) to (start_min, end_min) tuples."""
     result = []
     for u in sorted(units, key=lambda x: x["startTime"]):
         st = u["startTime"]
@@ -56,14 +58,18 @@ def periods_from_units(units):
         result.append((st // 100 * 60 + st % 100, et // 100 * 60 + et % 100))
     return result
 
+
 def to_min(hhmm):
     h, m = map(int, hhmm.split(":"))
     return h * 60 + m
 
+
 def from_min(day_prefix, minutes):
     return f"{day_prefix}T{minutes//60:02d}:{minutes%60:02d}"
 
+
 def split_entry(entry, periods):
+    """Split double lessons into individual period slots. Events > 120 min stay as one block."""
     day   = entry["start"][:10]
     start = to_min(entry["start"][11:16])
     end   = to_min(entry["end"][11:16])
@@ -74,11 +80,14 @@ def split_entry(entry, periods):
         return [(entry["start"], entry["end"])]
     return [(from_min(day, s), from_min(day, e)) for s, e in slots]
 
+
 def ics_dt(iso):
     return iso.replace("-", "").replace(":", "") + "00"
 
+
 def ics_escape(s):
     return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
 
 def make_title(entry):
     status          = entry["status"]
@@ -109,21 +118,23 @@ def make_title(entry):
 
     return subject
 
+
 def make_description(entry):
     lines = []
     if entry["teacher"]:
         if entry["teacher_removed"] and entry["teacher"] != entry["teacher_removed"]:
-            lines.append(f"Lehrer: {entry['teacher_removed']} → {entry['teacher']}")
+            lines.append(f"Teacher: {entry['teacher_removed']} → {entry['teacher']}")
         else:
-            lines.append(f"Lehrer: {entry['teacher']}")
+            lines.append(f"Teacher: {entry['teacher']}")
     if entry["room"]:
         if entry["room_removed"] and entry["room"] != entry["room_removed"]:
-            lines.append(f"Raum: {entry['room_removed']} → {entry['room']}")
+            lines.append(f"Room: {entry['room_removed']} → {entry['room']}")
         else:
-            lines.append(f"Raum: {entry['room']}")
+            lines.append(f"Room: {entry['room']}")
     if entry["note"]:
-        lines.append(f"Info: {entry['note']}")
+        lines.append(f"Note: {entry['note']}")
     return "\n".join(lines)
+
 
 def parse_entry(raw):
     subject = ""
@@ -158,10 +169,12 @@ def parse_entry(raw):
         "room_removed":    room_removed,
         "status":          raw.get("status", "REGULAR"),
         "note":            raw.get("substitutionText", "").strip(),
+        "_ids":            raw.get("ids", []),
     }
 
+
 try:
-    # 1. Web-Login
+    # Step 1: Web login → JSESSIONID cookie
     login_page  = session.get(f"https://{SERVER}/WebUntis/")
     token_match = re.search(r'name="token"\s+value="([^"]+)"', login_page.text)
     csrf = token_match.group(1) if token_match else ""
@@ -172,26 +185,24 @@ try:
         allow_redirects=True
     )
     if "JSESSIONID" not in session.cookies:
-        print(json.dumps({"status": "error", "error": "Login fehlgeschlagen"}))
+        print(json.dumps({"status": "error", "error": "Login failed - check credentials"}))
         sys.exit(1)
 
-    # 2. JWT Bearer Token
+    # Step 2: JWT Bearer token
     jwt = session.get(f"https://{SERVER}/WebUntis/api/token/new").text.strip()
     if not jwt.startswith("ey"):
-        print(json.dumps({"status": "error", "error": "JWT ungültig"}))
+        print(json.dumps({"status": "error", "error": "Invalid JWT token"}))
         sys.exit(1)
 
-    # 3. App-Daten: Tenant-ID + Stundenraster dynamisch laden
-    app_data = session.get(
+    # Step 3: Load app data → tenant ID + time grid (dynamic)
+    app_data  = session.get(
         f"https://{SERVER}/WebUntis/api/rest/view/v1/app/data",
         headers={"Authorization": f"Bearer {jwt}", "Accept": "application/json"}
     ).json()
-
     tenant_id = app_data["tenant"]["id"]
-    units     = app_data["currentSchoolYear"]["timeGrid"]["units"]
-    PERIODS   = periods_from_units(units)
+    PERIODS   = periods_from_units(app_data["currentSchoolYear"]["timeGrid"]["units"])
 
-    # 4. Diese + nächste Woche
+    # Step 4: Fetch timetable (current + next week)
     today  = date.today()
     monday = today - timedelta(days=today.weekday())
     friday = monday + timedelta(days=11)
@@ -215,16 +226,17 @@ try:
         }
     )
     if resp.status_code != 200:
-        print(json.dumps({"status": "error", "error": f"API {resp.status_code}"}))
+        print(json.dumps({"status": "error", "error": f"Timetable API returned {resp.status_code}"}))
         sys.exit(1)
 
     data      = resp.json()
     now_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
+    # Step 5: Build ICS
     ics_lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//HA WebUntis Script//DE",
+        "PRODID:-//HA WebUntis Script//EN",
         "CALSCALE:GREGORIAN",
         f"X-WR-CALNAME:{CAL_NAME}",
     ]
@@ -237,7 +249,7 @@ try:
     for day in data.get("days", []):
         day_date = day["date"]
 
-        # Belegte Slots sammeln
+        # Collect occupied period slots
         occupied = set()
         for raw in day.get("gridEntries", []):
             entry = parse_entry(raw)
@@ -247,10 +259,9 @@ try:
                 if ps >= start and pe <= end:
                     occupied.add(ps)
 
-        # Letzte belegte Periode bestimmen
+        # Invisible placeholder events up to last occupied slot
+        # (keeps week-planner-card row heights consistent)
         last_occupied = max(occupied) if occupied else 0
-
-        # Platzhalter für freie Slots bis zur letzten Stunde
         for ps, pe in PERIODS:
             if ps not in occupied and ps <= last_occupied:
                 slot_start = from_min(day_date, ps)
@@ -266,7 +277,7 @@ try:
                 ]
                 event_count += 1
 
-        # Echte Stunden
+        # Real lessons
         for raw in day.get("gridEntries", []):
             entry  = parse_entry(raw)
             title  = make_title(entry)
@@ -274,7 +285,9 @@ try:
             slots  = split_entry(entry, PERIODS)
 
             for start, end in slots:
-                uid = stable_uid(f"{start}-{entry['subject']}-{entry['teacher']}-{CAL_ID}")
+                # Stable UID based on WebUntis internal ID (survives content changes)
+                webuntis_id = str(entry["_ids"][0]) if entry["_ids"] else start
+                uid = stable_uid(webuntis_id + "-" + CAL_ID)
                 ics_lines += [
                     "BEGIN:VEVENT",
                     f"UID:{uid}",
