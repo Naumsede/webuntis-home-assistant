@@ -14,17 +14,16 @@ Requirements:
 """
 import requests, json, sys, re, hashlib, os
 from datetime import date, timedelta, datetime, timezone
+from collections import defaultdict
 
-# ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
-USERNAME   = os.getenv("WEBUNTIS_USER")     # set via environment variable
-PASSWORD   = os.getenv("WEBUNTIS_PASSWORD") # set via environment variable
-SERVER     = os.getenv("WEBUNTIS_SERVER")   # set via environment variable
-SCHOOL     = os.getenv("WEBUNTIS_SCHOOL")   # set via environment variable
+USERNAME   = os.getenv("WEBUNTIS_USER")
+PASSWORD   = os.getenv("WEBUNTIS_PASSWORD")
+SERVER     = os.getenv("WEBUNTIS_SERVER")
+SCHOOL     = os.getenv("WEBUNTIS_SCHOOL")
 STUDENT_ID = 12345                          # from find_student_ids.py
 ICS_PATH   = "/config/.storage/local_calendar.your_calendar.ics"
 CAL_ID     = "student1"                     # unique string for stable UIDs
 CAL_NAME   = "Timetable"                    # calendar display name
-# ─────────────────────────────────────────────────────────────────────────────
 
 DAYS_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
@@ -49,13 +48,10 @@ END:VTIMEZONE"""
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
 
-
 def stable_uid(key):
     return hashlib.md5(key.encode()).hexdigest()
 
-
 def periods_from_units(units):
-    """Convert WebUntis time grid (e.g. 750 = 07:50) to (start_min, end_min) tuples."""
     result = []
     for u in sorted(units, key=lambda x: x["startTime"]):
         st = u["startTime"]
@@ -63,18 +59,14 @@ def periods_from_units(units):
         result.append((st // 100 * 60 + st % 100, et // 100 * 60 + et % 100))
     return result
 
-
 def to_min(hhmm):
     h, m = map(int, hhmm.split(":"))
     return h * 60 + m
 
-
 def from_min(day_prefix, minutes):
     return f"{day_prefix}T{minutes//60:02d}:{minutes%60:02d}"
 
-
 def split_entry(entry, periods):
-    """Split double lessons into individual period slots. Events > 120 min stay as one block."""
     day   = entry["start"][:10]
     start = to_min(entry["start"][11:16])
     end   = to_min(entry["end"][11:16])
@@ -85,14 +77,11 @@ def split_entry(entry, periods):
         return [(entry["start"], entry["end"])]
     return [(from_min(day, s), from_min(day, e)) for s, e in slots]
 
-
 def ics_dt(iso):
     return iso.replace("-", "").replace(":", "") + "00"
 
-
 def ics_escape(s):
     return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
-
 
 def make_title(entry):
     status          = entry["status"]
@@ -102,44 +91,54 @@ def make_title(entry):
     room_current    = entry["room"]
     room_removed    = entry["room_removed"]
     note            = entry.get("note", "")
+    cancelled_subject = entry.get("cancelled_subject", "")
 
     if status == "CANCELLED":
         return f"❌ {subject} fällt aus"
 
     if status == "CHANGED":
-        parts = []
+        # Wenn eine andere Stunde zur gleichen Zeit ausgefallen ist
+        if cancelled_subject and cancelled_subject != subject:
+            title = f"⚠️ {subject} [statt {cancelled_subject}]"
+        else:
+            title = f"⚠️ {subject}"
+
+        # Lehrerwechsel in Titel (Raumwechsel geht in LOCATION)
         if teacher_removed and teacher_current != teacher_removed:
             ziel = teacher_current if teacher_current else "–"
-            parts.append(f"{teacher_removed}→{ziel}")
-        if room_removed and room_current != room_removed:
-            parts.append(f"Raum: {room_removed}→{room_current}")
-        if parts:
-            title = f"⚠️ {subject}: " + ", ".join(parts)
-            if note:
-                title += f" ({note})"
-        else:
-            title = f"⚠️ {subject}: {note}" if note else f"⚠️ {subject}"
+            title += f": {teacher_removed}→{ziel}"
+        if note:
+            title += f" ({note})"
+        return title
+
+    if status == "REGULAR" and cancelled_subject and cancelled_subject != subject:
+        # Reguläre Ersatzstunde für ausgefallene Stunde
+        title = f"⚠️ {subject} [statt {cancelled_subject}]"
+        note = entry.get("note", "")
+        if note:
+            title += f" ({note})"
         return title
 
     return subject
 
-
 def make_description(entry):
     lines = []
+    cancelled_subject = entry.get("cancelled_subject", "")
+    if cancelled_subject and cancelled_subject != entry["subject"]:
+        lines.append(f"Ersatz für: {cancelled_subject}")
     if entry["teacher"]:
         if entry["teacher_removed"] and entry["teacher"] != entry["teacher_removed"]:
-            lines.append(f"Teacher: {entry['teacher_removed']} → {entry['teacher']}")
+            lines.append(f"Lehrer: {entry['teacher_removed']} → {entry['teacher']}")
         else:
-            lines.append(f"Teacher: {entry['teacher']}")
+            lines.append(f"Lehrer: {entry['teacher']}")
     if entry["room"]:
         if entry["room_removed"] and entry["room"] != entry["room_removed"]:
-            lines.append(f"Room: {entry['room_removed']} → {entry['room']}")
+            lines.append(f"Raum: {entry['room_removed']} → {entry['room']}")
         else:
-            lines.append(f"Room: {entry['room']}")
+            lines.append(f"Raum: {entry['room']}")
     if entry["note"]:
-        lines.append(f"Note: {entry['note']}")
+        lines.append(f"Info: {entry['note']}")
     return "\n".join(lines)
-
 
 def parse_entry(raw):
     subject = ""
@@ -165,20 +164,52 @@ def parse_entry(raw):
         break
 
     return {
-        "start":           raw["duration"]["start"],
-        "end":             raw["duration"]["end"],
-        "subject":         subject,
-        "teacher":         teacher_current,
-        "teacher_removed": teacher_removed,
-        "room":            room_current,
-        "room_removed":    room_removed,
-        "status":          raw.get("status", "REGULAR"),
-        "note":            raw.get("substitutionText", "").strip(),
+        "start":            raw["duration"]["start"],
+        "end":              raw["duration"]["end"],
+        "subject":          subject,
+        "teacher":          teacher_current,
+        "teacher_removed":  teacher_removed,
+        "room":             room_current,
+        "room_removed":     room_removed,
+        "status":           raw.get("status", "REGULAR"),
+        "note":             raw.get("substitutionText", "").strip(),
+        "cancelled_subject": "",  # wird unten befüllt
+        "_ids":             raw.get("ids", []),
     }
 
+def merge_entries(entries):
+    """
+    Gruppiert Einträge nach Startzeit.
+    Wenn zur gleichen Zeit ein CANCELLED und ein anderes Event existieren,
+    wird das CANCELLED-Fach als cancelled_subject ins andere Event übernommen
+    und das CANCELLED-Event entfernt.
+    """
+    by_start = defaultdict(list)
+    for e in entries:
+        by_start[e["start"]].append(e)
+
+    result = []
+    for start_time, group in sorted(by_start.items()):
+        cancelled = [e for e in group if e["status"] == "CANCELLED"]
+        others    = [e for e in group if e["status"] != "CANCELLED"]
+
+        if cancelled and others:
+            # Zusammenführen: cancelled_subject ins andere Event eintragen
+            cancelled_subj = cancelled[0]["subject"]
+            for other in others:
+                other["cancelled_subject"] = cancelled_subj
+            result.extend(others)
+            # Änderungen-Liste: CANCELLED als eigenen Eintrag weglassen
+        elif cancelled and not others:
+            # Nur Ausfall, kein Ersatz → normal anzeigen
+            result.extend(cancelled)
+        else:
+            result.extend(others)
+
+    return result
 
 try:
-    # Step 1: Web login → JSESSIONID cookie
+    # 1. Web-Login
     login_page  = session.get(f"https://{SERVER}/WebUntis/")
     token_match = re.search(r'name="token"\s+value="([^"]+)"', login_page.text)
     csrf = token_match.group(1) if token_match else ""
@@ -189,24 +220,26 @@ try:
         allow_redirects=True
     )
     if "JSESSIONID" not in session.cookies:
-        print(json.dumps({"status": "error", "error": "Login failed - check credentials"}))
+        print(json.dumps({"status": "error", "error": "Login fehlgeschlagen"}))
         sys.exit(1)
 
-    # Step 2: JWT Bearer token
+    # 2. JWT Bearer Token
     jwt = session.get(f"https://{SERVER}/WebUntis/api/token/new").text.strip()
     if not jwt.startswith("ey"):
-        print(json.dumps({"status": "error", "error": "Invalid JWT token"}))
+        print(json.dumps({"status": "error", "error": "JWT ungültig"}))
         sys.exit(1)
 
-    # Step 3: Load app data → tenant ID + time grid (dynamic)
-    app_data  = session.get(
+    # 3. App-Daten: Tenant-ID + Stundenraster dynamisch laden
+    app_data = session.get(
         f"https://{SERVER}/WebUntis/api/rest/view/v1/app/data",
         headers={"Authorization": f"Bearer {jwt}", "Accept": "application/json"}
     ).json()
-    tenant_id = app_data["tenant"]["id"]
-    PERIODS   = periods_from_units(app_data["currentSchoolYear"]["timeGrid"]["units"])
 
-    # Step 4: Fetch timetable (current + next week)
+    tenant_id = app_data["tenant"]["id"]
+    units     = app_data["currentSchoolYear"]["timeGrid"]["units"]
+    PERIODS   = periods_from_units(units)
+
+    # 4. Diese + nächste Woche
     today  = date.today()
     monday = today - timedelta(days=today.weekday())
     friday = monday + timedelta(days=11)
@@ -230,17 +263,16 @@ try:
         }
     )
     if resp.status_code != 200:
-        print(json.dumps({"status": "error", "error": f"Timetable API returned {resp.status_code}"}))
+        print(json.dumps({"status": "error", "error": f"API {resp.status_code}"}))
         sys.exit(1)
 
     data      = resp.json()
     now_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    # Step 5: Build ICS
     ics_lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//HA WebUntis Script//EN",
+        "PRODID:-//HA WebUntis Script//DE",
         "CALSCALE:GREGORIAN",
         f"X-WR-CALNAME:{CAL_NAME}",
     ]
@@ -253,19 +285,23 @@ try:
     for day in data.get("days", []):
         day_date = day["date"]
 
-        # Collect occupied period slots
+        # Alle Einträge parsen und zusammenführen
+        raw_entries = [parse_entry(raw) for raw in day.get("gridEntries", [])]
+        entries = merge_entries(raw_entries)
+
+        # Belegte Slots sammeln
         occupied = set()
-        for raw in day.get("gridEntries", []):
-            entry = parse_entry(raw)
+        for entry in entries:
             start = to_min(entry["start"][11:16])
             end   = to_min(entry["end"][11:16])
             for ps, pe in PERIODS:
                 if ps >= start and pe <= end:
                     occupied.add(ps)
 
-        # Invisible placeholder events up to last occupied slot
-        # (keeps week-planner-card row heights consistent)
+        # Letzte belegte Periode bestimmen
         last_occupied = max(occupied) if occupied else 0
+
+        # Platzhalter für freie Slots bis zur letzten Stunde
         for ps, pe in PERIODS:
             if ps not in occupied and ps <= last_occupied:
                 slot_start = from_min(day_date, ps)
@@ -281,16 +317,14 @@ try:
                 ]
                 event_count += 1
 
-        # Real lessons
-        for raw in day.get("gridEntries", []):
-            entry  = parse_entry(raw)
+        # Echte Stunden
+        for entry in entries:
             title  = make_title(entry)
             desc   = make_description(entry)
             slots  = split_entry(entry, PERIODS)
 
             for start, end in slots:
-                # Stable UID based on WebUntis internal ID (survives content changes)
-                uid = stable_uid(str(raw.get("ids", [start])[0]) + "-" + CAL_ID)
+                uid = stable_uid(str(entry["_ids"][0]) + "-" + CAL_ID if entry["_ids"] else start + "-" + CAL_ID)
                 ics_lines += [
                     "BEGIN:VEVENT",
                     f"UID:{uid}",
@@ -299,13 +333,20 @@ try:
                     f"DTEND;TZID=Europe/Berlin:{ics_dt(end)}",
                     f"SUMMARY:{ics_escape(title)}",
                 ]
-                ics_lines.append(f"LOCATION:{ics_escape(entry['room']) if entry['room'] else ' '}")
+                # LOCATION: show room change if present, otherwise just room
+                if entry["room_removed"] and entry["room"] != entry["room_removed"]:
+                    location = f"[{entry['room_removed']}]→{entry['room']}"
+                elif entry["room"]:
+                    location = entry["room"]
+                else:
+                    location = " "
+                ics_lines.append(f"LOCATION:{ics_escape(location)}")
                 if desc:
                     ics_lines.append(f"DESCRIPTION:{ics_escape(desc)}")
                 ics_lines.append("END:VEVENT")
                 event_count += 1
 
-            if entry["status"] != "REGULAR":
+            if entry["status"] != "REGULAR" or entry.get("cancelled_subject"):
                 changes_count += 1
                 day_dt  = date.fromisoformat(entry["start"][:10])
                 day_str = f"{DAYS_DE[day_dt.weekday()]} {day_dt.strftime('%d.%m.')}"
@@ -330,5 +371,6 @@ try:
 finally:
     try:
         session.post(f"https://{SERVER}/WebUntis/j_spring_security_logout")
+        session.close()
     except Exception:
         pass

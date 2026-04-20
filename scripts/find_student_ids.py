@@ -5,12 +5,10 @@ Run this once during setup, then add the IDs to webuntis_calendar.py.
 """
 import requests, json, re
 
-# ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
 USERNAME = "your@email.com"
 PASSWORD = "yourpassword"
 SERVER   = "your-school.webuntis.com"
 SCHOOL   = "your-school"
-# ─────────────────────────────────────────────────────────────────────────────
 
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
@@ -23,7 +21,6 @@ session.post(f"https://{SERVER}/WebUntis/j_spring_security_check",
     allow_redirects=True)
 
 jwt = session.get(f"https://{SERVER}/WebUntis/api/token/new").text.strip()
-
 app_data = session.get(f"https://{SERVER}/WebUntis/api/rest/view/v1/app/data",
     headers={"Authorization": f"Bearer {jwt}", "Accept": "application/json"}).json()
 

@@ -1,4 +1,3 @@
-# Markdown card for daily school messages
 type: markdown
 title: 📢 School Messages Today
 content: |
@@ -11,5 +10,5 @@ content: |
   {% endif %}
   {% endfor %}
   {% else %}
-  No messages today.
+  *No messages today.*
   {% endif %}

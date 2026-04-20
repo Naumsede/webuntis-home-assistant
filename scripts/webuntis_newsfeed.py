@@ -16,18 +16,15 @@ Requirements:
 import requests, json, sys, re, os
 from html import unescape
 
-# ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
 USERNAME = os.getenv("WEBUNTIS_USER")
 PASSWORD = os.getenv("WEBUNTIS_PASSWORD")
 SERVER   = os.getenv("WEBUNTIS_SERVER")
 SCHOOL   = os.getenv("WEBUNTIS_SCHOOL")
-# ─────────────────────────────────────────────────────────────────────────────
 
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
 
 try:
-    # Step 1: Login
     login_page  = session.get(f"https://{SERVER}/WebUntis/")
     token_match = re.search(r'name="token"\s+value="([^"]+)"', login_page.text)
     token = token_match.group(1) if token_match else ""
@@ -41,13 +38,9 @@ try:
         print(json.dumps({"count": 0, "items": [], "error": "Login failed"}))
         sys.exit(1)
 
-    # Step 2: Fetch today page (messages are embedded in HTML)
-    resp = session.get(
-        f"https://{SERVER}/WebUntis/main.do",
-        params={"request.preventCache": "1"}
-    )
+    resp = session.get(f"https://{SERVER}/WebUntis/main.do",
+                       params={"request.preventCache": "1"})
 
-    # Step 3: Extract messagesOfDay from data-dojo-props attribute
     # Note: &#034; is the HTML entity for " - must be matched before unescape()
     match = re.search(
         r'data-dojo-type="grupet/widget/app/MessageOfDayList"\s+data-dojo-props="([^"]*(?:&#034;[^"]*)*)"',
@@ -64,11 +57,7 @@ try:
         sys.exit(0)
 
     messages = json.loads(msg_match.group(1))
-    items = [
-        {"title": m.get("subject", ""), "text": m.get("body", "")}
-        for m in messages
-    ]
-
+    items = [{"title": m.get("subject", ""), "text": m.get("body", "")} for m in messages]
     print(json.dumps({"count": len(items), "items": items}, ensure_ascii=False))
 
 finally:
