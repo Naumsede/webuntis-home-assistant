@@ -1,10 +1,13 @@
 # week-planner-card configuration for WebUntis timetable
 # Requires: https://github.com/FamousWolf/week-planner-card (install via HACS)
 #
-# CSS note: Subject selectors use a Braille blank character (U+2800) appended
-# to each subject name. This invisible anchor ensures that when a cancelled
-# subject appears in the title (e.g. "Deutsch [statt: Musik]"), only the
-# active subject triggers the color — not the cancelled one in brackets.
+# IMPORTANT - CSS subject colors:
+# Each subject selector ends with an invisible Braille blank character (U+2800),
+# the same character the script appends to the active subject. This ensures that
+# in a merged event like "Deutsch⠀[statt: Musik]" only the ACTIVE subject
+# (Deutsch) triggers the color - the cancelled subject (Musik) in brackets has
+# no anchor and is ignored. Do NOT remove the (invisible) character after each
+# subject name in the selectors below.
 
 type: custom:week-planner-card
 title: "Student Timetable"
@@ -20,19 +23,14 @@ days: "5"
 hideWeekend: true
 combineSimilarEvents: false
 showDescription: false
-showLocation: true            # shows room number / room change below event title
+showLocation: true            # shows room / room change below event title
 showTitle: true
 compact: false
 showLegend: false
 maxEvents: "0"
 hidePastEvents: false
 legendToggle: false
-locale: de-DE                 # German month/day names (adjust to your locale)
-weather:
-  entity: weather.forecast_home   # replace with your weather entity
-  showCondition: true
-  showTemperature: true
-  showLowTemperature: true
+locale: de-DE
 texts:
   today: heute
   tomorrow: morgen
@@ -40,60 +38,35 @@ texts:
   noEvents: schulfrei
 card_mod:
   style: >
-    /* Subject color coding - adjust subjects and colors to match your school */
-    /* Note: each selector contains an invisible Braille blank (U+2800) after */
-    /* the subject name - do not remove it! */
+    ha-card {
+      max-width: 100% !important;
+      width: 100% !important;
+    }
+    .days {
+      display: flex !important;
+      gap: 6px !important;
+    }
+    .day {
+      flex: 1 1 0px !important;
+      min-width: 0 !important;
+      padding: 2px !important;
+    }
+    .event-name {
+      font-size: 0.9rem !important;
+      line-height: 1.1 !important;
+    }
     .event[data-summary*="Mathematik⠀"], .event[data-summary*="Deutsch⠀"], .event[data-summary*="Biologie⠀"], .event[data-summary*="Sport⠀"], .event[data-summary*="Kunst⠀"], .event[data-summary*="Religion⠀"], .event[data-summary*="Klassenleitung⠀"], .event[data-summary*="Englisch⠀"], .event[data-summary*="Musik⠀"] {
       color: white !important;
     }
-    .event[data-summary*="Mathematik⠀"] {
-      border-color: rgba(0, 0, 139, 0.7) !important;
-      background-color: rgba(0, 0, 139, 0.5) !important;
-    }
-    .event[data-summary*="Deutsch⠀"] {
-      border-color: rgba(165, 42, 42, 0.7) !important;
-      background-color: rgba(165, 42, 42, 0.5) !important;
-    }
-    .event[data-summary*="Biologie⠀"] {
-      border-color: rgba(0, 100, 0, 0.7) !important;
-      background-color: rgba(0, 100, 0, 0.5) !important;
-    }
-    .event[data-summary*="Sport⠀"] {
-      border-color: rgba(255, 69, 0, 0.7) !important;
-      background-color: rgba(255, 69, 0, 0.5) !important;
-    }
-    .event[data-summary*="Kunst⠀"] {
-      border-color: rgba(255, 140, 0, 0.7) !important;
-      background-color: rgba(255, 140, 0, 0.5) !important;
-    }
-    .event[data-summary*="Religion⠀"] {
-      border-color: rgba(105, 105, 105, 0.7) !important;
-      background-color: rgba(105, 105, 105, 0.5) !important;
-    }
-    .event[data-summary*="Klassenleitung⠀"] {
-      border-color: rgba(46, 139, 87, 0.7) !important;
-      background-color: rgba(46, 139, 87, 0.5) !important;
-    }
-    .event[data-summary*="Englisch⠀"] {
-      border-color: rgba(128, 0, 128, 0.7) !important;
-      background-color: rgba(128, 0, 128, 0.5) !important;
-    }
-    .event[data-summary*="Musik⠀"] {
-      border-color: rgba(218, 165, 32, 0.7) !important;
-      background-color: rgba(218, 165, 32, 0.5) !important;
-    }
-    /* Invisible placeholder events (keeps row heights consistent) */
-    .event[data-summary=" "] {
-      opacity: 0 !important;
-      min-height: 78px !important;
-      pointer-events: none !important;
-    }
-    /* Changed lessons - orange left border */
-    .event[data-summary*="⚠️"] {
-      border-left: 4px solid rgba(255, 165, 0, 1) !important;
-    }
-    /* Cancelled lessons - strikethrough */
-    .event[data-summary*="❌"] {
-      text-decoration: line-through !important;
-      opacity: 0.6 !important;
-    }
+    .event[data-summary*="Mathematik⠀"] { border-color: rgba(0, 0, 139, 0.7) !important; background-color: rgba(0, 0, 139, 0.5) !important; }
+    .event[data-summary*="Deutsch⠀"] { border-color: rgba(165, 42, 42, 0.7) !important; background-color: rgba(165, 42, 42, 0.5) !important; }
+    .event[data-summary*="Biologie⠀"] { border-color: rgba(0, 100, 0, 0.7) !important; background-color: rgba(0, 100, 0, 0.5) !important; }
+    .event[data-summary*="Sport⠀"] { border-color: rgba(255, 69, 0, 0.7) !important; background-color: rgba(255, 69, 0, 0.5) !important; }
+    .event[data-summary*="Kunst⠀"] { border-color: rgba(255, 140, 0, 0.7) !important; background-color: rgba(255, 140, 0, 0.5) !important; }
+    .event[data-summary*="Religion⠀"] { border-color: rgba(105, 105, 105, 0.7) !important; background-color: rgba(105, 105, 105, 0.5) !important; }
+    .event[data-summary*="Klassenleitung⠀"] { border-color: rgba(46, 139, 87, 0.7) !important; background-color: rgba(46, 139, 87, 0.5) !important; }
+    .event[data-summary*="Englisch⠀"] { border-color: rgba(128, 0, 128, 0.7) !important; background-color: rgba(128, 0, 128, 0.5) !important; }
+    .event[data-summary*="Musik⠀"] { border-color: rgba(218, 165, 32, 0.7) !important; background-color: rgba(218, 165, 32, 0.5) !important; }
+    .event[data-summary=" "] { opacity: 0 !important; min-height: 78px !important; pointer-events: none !important; }
+    .event[data-summary*="⚠️"] { border-left: 4px solid rgba(255, 165, 0, 1) !important; }
+    .event[data-summary*="❌"] { text-decoration: line-through !important; opacity: 0.6 !important; }

@@ -4,6 +4,7 @@ content: |
   {% set msgs = state_attr('sensor.webuntis_messages', 'items') %}
   {% if msgs and msgs | count > 0 %}
   {% for m in msgs %}
+  {% if m.title %}**{{ m.title }}**{% endif %}
   {{ m.text }}{% if not loop.last %}
 
   ---

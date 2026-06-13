@@ -11,12 +11,15 @@ command_line:
         WEBUNTIS_SERVER='your-school.webuntis.com'
         WEBUNTIS_SCHOOL='your-school'
         python3 /config/scripts/webuntis_calendar.py
-      scan_interval: 7200
+      scan_interval: 7200          # refresh every 2 hours
       command_timeout: 60
       value_template: "{{ value_json.changes | default(0) }}"
       json_attributes:
         - items
         - events
+
+  # Add more students by copying the block above and pointing it at a
+  # second copy of the script with a different STUDENT_ID / ICS_PATH / CAL_ID
 
   - sensor:
       name: "WebUntis Messages"
@@ -27,7 +30,7 @@ command_line:
         WEBUNTIS_SERVER='your-school.webuntis.com'
         WEBUNTIS_SCHOOL='your-school'
         python3 /config/scripts/webuntis_newsfeed.py
-      scan_interval: 1800
+      scan_interval: 1800          # refresh every 30 minutes
       command_timeout: 30
       value_template: "{{ value_json.count | default(0) }}"
       json_attributes:

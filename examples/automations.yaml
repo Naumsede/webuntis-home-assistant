@@ -1,5 +1,6 @@
 # Automations for WebUntis HA integration
 
+# ── Morning refresh (forces timetable update at 6 AM on school days) ──────────
 - alias: "WebUntis Morning Refresh"
   description: "Force timetable update at 6 AM on school days"
   triggers:
@@ -13,8 +14,11 @@
       target:
         entity_id:
           - sensor.webuntis_changes_student1
+          # add more students here
   mode: single
 
+# ── Timetable change notification (combined for multiple students) ────────────
+# Uses trigger.id to label which student. Add one trigger block per student.
 - alias: "WebUntis Timetable Changes"
   description: "Notify only on genuinely new timetable changes"
   mode: parallel
@@ -24,11 +28,17 @@
       entity_id: sensor.webuntis_changes_student1
       id: Student1
       not_from: [unknown, unavailable, none]
+    # - trigger: state
+    #   entity_id: sensor.webuntis_changes_student2
+    #   id: Student2
+    #   not_from: [unknown, unavailable, none]
   conditions:
     - condition: template
       value_template: "{{ trigger.to_state.state | int(0) > trigger.from_state.state | int(0) }}"
   actions:
     - variables:
+        # Note: attributes['items'] (bracket notation) - NOT attributes.items
+        # (.items is a Python dict method and would break the template)
         new_items: >-
           {% set old_texts = trigger.from_state.attributes['items'] | default([]) | map(attribute='text') | list %}
           {% set curr_items = trigger.to_state.attributes['items'] | default([]) %}
@@ -48,28 +58,34 @@
         title: "📅 Timetable Change – {{ trigger.id }}"
         message: "{{ message_text }}"
 
+# ── School messages notification ─────────────────────────────────────────────
+# Triggers on the 'items' attribute (not the state count), because the message
+# count can stay the same while the content changes. Guarded against missing
+# from_state on restart and against duplicate/empty notifications.
 - alias: "WebUntis New School Messages"
   description: "Notify only on genuinely new school messages"
   mode: single
   triggers:
     - trigger: state
       entity_id: sensor.webuntis_messages
+      attribute: items
       not_from: [unknown, unavailable, none]
   conditions:
     - condition: template
-      value_template: "{{ trigger.to_state.state | int(0) > trigger.from_state.state | int(0) }}"
+      value_template: "{{ state_attr('sensor.webuntis_messages', 'items') | default([]) | count > 0 }}"
+    - condition: template
+      value_template: >-
+        {% set old_texts = (trigger.from_state.attributes['items'] if trigger.from_state else []) | map(attribute='text') | list %}
+        {% set curr_items = state_attr('sensor.webuntis_messages', 'items') | default([]) %}
+        {{ curr_items | rejectattr('text', 'in', old_texts) | list | count > 0 }}
   actions:
     - variables:
         new_items: >-
-          {% set old_texts = trigger.from_state.attributes['items'] | default([]) | map(attribute='text') | list %}
-          {% set curr_items = trigger.to_state.attributes['items'] | default([]) %}
+          {% set old_texts = (trigger.from_state.attributes['items'] if trigger.from_state else []) | map(attribute='text') | list %}
+          {% set curr_items = state_attr('sensor.webuntis_messages', 'items') | default([]) %}
           {{ curr_items | rejectattr('text', 'in', old_texts) | list }}
         message_text: >-
-          {% if new_items | count > 0 %}
           {% for m in new_items %}{{ m.text }}{{ '\n' if not loop.last }}{% endfor %}
-          {% else %}
-          No message text available.
-          {% endif %}
     - action: notify.notify
       data:
         title: "📢 New School Message"
