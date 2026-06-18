@@ -1,13 +1,16 @@
+# WebUntis → Home Assistant — daily school messages card (Markdown)
+#
+# Shows the messages from the webuntis_messages sensor. No custom cards needed.
+
 type: markdown
-title: 📢 School Messages Today
+title: 📢 School messages
 content: |
   {% set msgs = state_attr('sensor.webuntis_messages', 'items') %}
   {% if msgs and msgs | count > 0 %}
   {% for m in msgs %}
   {% if m.title %}**{{ m.title }}**{% endif %}
-  {{ m.text }}{% if not loop.last %}
-
-  ---
+  {{ m.text | replace('<br>', '') }}
+  {% if not loop.last %}
   {% endif %}
   {% endfor %}
   {% else %}

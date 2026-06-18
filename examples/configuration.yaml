@@ -1,7 +1,13 @@
 # Add to your configuration.yaml
-# Credentials are passed as environment variables in the command string.
+#
+# Credentials are passed as environment variables in the command string so they
+# never end up in the calendar/ICS files. Keep the real values out of any file
+# you commit — use Home Assistant secrets or environment variables.
 
 command_line:
+  # ── Timetable change sensor, one per student ───────────────────────────────
+  # Copy webuntis_calendar.py once per student and set STUDENT_ID / ICS_PATH /
+  # CAL_ID / CAL_NAME at the top of each copy.
   - sensor:
       name: "WebUntis Changes Student1"
       unique_id: webuntis_changes_student1
@@ -10,17 +16,31 @@ command_line:
         WEBUNTIS_PASSWORD='yourpassword'
         WEBUNTIS_SERVER='your-school.webuntis.com'
         WEBUNTIS_SCHOOL='your-school'
-        python3 /config/scripts/webuntis_calendar.py
-      scan_interval: 7200          # refresh every 2 hours
+        python3 /config/scripts/webuntis_calendar_student1.py
+      scan_interval: 7200      # refresh every 2 hours
       command_timeout: 60
       value_template: "{{ value_json.changes | default(0) }}"
       json_attributes:
         - items
         - events
 
-  # Add more students by copying the block above and pointing it at a
-  # second copy of the script with a different STUDENT_ID / ICS_PATH / CAL_ID
+  - sensor:
+      name: "WebUntis Changes Student2"
+      unique_id: webuntis_changes_student2
+      command: >
+        WEBUNTIS_USER='your@email.com'
+        WEBUNTIS_PASSWORD='yourpassword'
+        WEBUNTIS_SERVER='your-school.webuntis.com'
+        WEBUNTIS_SCHOOL='your-school'
+        python3 /config/scripts/webuntis_calendar_student2.py
+      scan_interval: 7200
+      command_timeout: 60
+      value_template: "{{ value_json.changes | default(0) }}"
+      json_attributes:
+        - items
+        - events
 
+  # ── Daily school messages sensor (shared, not per student) ─────────────────
   - sensor:
       name: "WebUntis Messages"
       unique_id: webuntis_messages
@@ -30,7 +50,7 @@ command_line:
         WEBUNTIS_SERVER='your-school.webuntis.com'
         WEBUNTIS_SCHOOL='your-school'
         python3 /config/scripts/webuntis_newsfeed.py
-      scan_interval: 1800          # refresh every 30 minutes
+      scan_interval: 1800      # refresh every 30 minutes
       command_timeout: 30
       value_template: "{{ value_json.count | default(0) }}"
       json_attributes:
