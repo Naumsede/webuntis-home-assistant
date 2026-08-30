@@ -16,6 +16,7 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
 | Substitution text | ❌ | ✅ e.g. "Aufgabe Ko" |
 | Lesson cancellation | ✅ | ✅ |
 | Room changes | ✅ | ✅ with old → new room |
+| Lesson content (Lehrstoff) | ❌ | ✅ per single period |
 | Daily school messages | ❌ | ✅ |
 | Dynamic time grid | ❌ | ✅ loaded from API |
 
@@ -29,9 +30,12 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
 - 🔀 Cancelled + replacement lessons at the same time merged into one event
   (e.g. `⚠️ Deutsch [statt: Musik] (Aufgabe Ko)`)
 - 🏫 Room changes shown in the location line (`[MS2]→043`)
+- 📖 Lesson content (`teachingContent`) per single period in the description
 - 📢 Daily school messages as an HA sensor
 - 🔔 Push notifications on genuinely new changes / messages only (no duplicates)
-- 🕐 Dynamic time grid loaded from API (no hardcoded periods)
+- 🕐 Dynamic time grid loaded from API, with fallback derived from the timetable
+  itself when no school year is reported (holidays)
+- 🛟 Holiday guard: an empty timetable never overwrites the existing calendar
 - 🌍 Correct DST handling via VTIMEZONE block
 - 🎨 Reliable subject color coding via an invisible Braille-blank CSS anchor
 - 📦 No external dependencies beyond `requests`
@@ -43,10 +47,10 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
 - Home Assistant with the `local_calendar` integration enabled
 - Python 3 on your HA host (via the Terminal & SSH add-on)
 - `requests` library:
-  ```bash
-  pip3 install requests --break-system-packages
-  ```
-  (Re-run after a Home Assistant Core update.)
+```bash
+pip3 install requests --break-system-packages
+```
+(Re-run after a Home Assistant Core update.)
 
 ---
 
@@ -78,6 +82,15 @@ GET /WebUntis/api/rest/view/v1/timetable/entries
 ```
 Status values per entry: `REGULAR`, `CHANGED`, `CANCELLED`.
 
+**Lesson detail (single periods + lesson content):**
+```
+GET /WebUntis/api/rest/view/v2/calendar-entry/detail
+    ?elementId=<student_id>&elementType=5
+    &startDateTime=<iso>&endDateTime=<iso>&homeworkOption=DUE
+```
+Returns `calendarEntries[].singleEntries[]` with `teachingContent` and the exact
+start/end time of each single period.
+
 **Daily school messages:**
 ```
 GET /WebUntis/main.do
@@ -90,33 +103,33 @@ Messages are embedded in the HTML, parsed from the `data-dojo-props` of
 ## Setup
 
 1. **Enable Local Calendar** in `configuration.yaml`:
-   ```yaml
-   local_calendar:
-   ```
-   Then create one calendar per student under Settings → Integrations → Local Calendar.
+```yaml
+local_calendar:
+```
+Then create one calendar per student under Settings → Integrations → Local Calendar.
 
 2. **Find the ICS path** — create a test event via the HA UI, then:
-   ```bash
-   ls /config/.storage/local_calendar*.ics
-   ```
+```bash
+ls /config/.storage/local_calendar*.ics
+```
 
 3. **Find your IDs** — run the helper:
-   ```bash
-   python3 scripts/find_student_ids.py
-   ```
+```bash
+python3 scripts/find_student_ids.py
+```
 
 4. **Configure scripts** — copy `scripts/webuntis_calendar.py` to
-   `/config/scripts/` (one copy per student) and set `STUDENT_ID`, `ICS_PATH`,
-   `CAL_ID`, `CAL_NAME` at the top of each. Credentials come from environment
-   variables (see `examples/configuration.yaml`).
+`/config/scripts/` (one copy per student) and set `STUDENT_ID`, `ICS_PATH`,
+`CAL_ID`, `CAL_NAME` at the top of each. Credentials come from environment
+variables (see `examples/configuration.yaml`).
 
 5. **Test:**
-   ```bash
-   WEBUNTIS_USER='...' WEBUNTIS_PASSWORD='...' \
-   WEBUNTIS_SERVER='your-school.webuntis.com' WEBUNTIS_SCHOOL='your-school' \
-   python3 /config/scripts/webuntis_calendar.py
-   ```
-   Expected: `{"status": "ok", "events": 42, "changes": 3, "items": [...]}`
+```bash
+WEBUNTIS_USER='...' WEBUNTIS_PASSWORD='...' \
+WEBUNTIS_SERVER='your-school.webuntis.com' WEBUNTIS_SCHOOL='your-school' \
+python3 /config/scripts/webuntis_calendar.py
+```
+Expected: `{"status": "ok", "events": 42, "changes": 3, "items": [...]}`
 
 6. **Add sensors** — see `examples/configuration.yaml`
 7. **Add automations** — see `examples/automations.yaml`
@@ -138,10 +151,35 @@ in editors, unlike a zero-width space.
 
 ---
 
+## Notes on holidays and school year changes
+
+During holidays WebUntis reports `currentSchoolYear: null`, even when the
+timetable for the upcoming school year is already published. The
+`/api/rest/view/v1/timegrid` endpoint is no help either: it ignores the
+`schoolyearId` parameter and returns a generic default grid (`schoolyearId: -1`)
+that does not match the real periods.
+
+The script therefore handles both cases:
+
+- **Time grid** — taken from `currentSchoolYear` when available, otherwise
+  derived from the timetable data itself. Short entries are single periods;
+  longer blocks are split via `calendar-entry/detail`.
+- **Empty results** — if the requested range contains no lessons at all, the
+  script exits with `{"status": "skipped"}` and leaves the existing ICS file
+  untouched, so a real holiday period does not wipe the calendar.
+
+Note that the script only writes the current + next week. Deep in the summer
+holidays that range is empty and the calendar keeps its last state; it fills up
+again automatically once the first school week comes into range.
+
+---
+
 ## Limitations
 
 - ⚠️ Undocumented API — may break on WebUntis updates
 - 🔄 Writes the current + next week only
+- 🕐 The derived time grid only contains periods that actually occur in the
+  fetched range
 - 👤 Tested with a `LEGAL_GUARDIAN` (parent) account
 - 🏫 Tested on a German WebUntis instance
 
