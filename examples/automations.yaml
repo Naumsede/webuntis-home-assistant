@@ -1,8 +1,9 @@
 # WebUntis → Home Assistant — example automations
 #
-# Two automations:
+# Three automations:
 #   1. Timetable changes per student (parallel, one trigger per student sensor)
 #   2. Daily school messages
+#   3. Morning refresh (forces a fresh fetch before school starts)
 #
 # Adjust entity_ids, notify target and calendar entities to match your setup.
 # notify.mobile_app_your_phone is the default mobile-app notify service —
@@ -104,4 +105,35 @@
       data:
         message: "{{ message_text }}"
         title: "📢 New school message"
+  mode: single
+
+# ── 3. Morning refresh ───────────────────────────────────────────────────────
+# The command_line sensors poll on their own scan_interval (e.g. every 2 hours),
+# so the exact times they run drift. This forces a fresh fetch shortly before
+# school starts. homeassistant.update_entity runs the sensor's command, which
+# also rewrites the ICS file — no extra shell_command needed.
+# If it finds new changes, automation 1 fires and reloads the calendars.
+- alias: WebUntis morning refresh
+  description: Forces a timetable fetch on school mornings
+  triggers:
+    - trigger: time
+      at: "06:30:00"
+    - trigger: time
+      at: "07:00:00"
+    - trigger: time
+      at: "07:30:00"
+  conditions:
+    - condition: time
+      weekday:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+  actions:
+    - action: homeassistant.update_entity
+      target:
+        entity_id:
+          - sensor.webuntis_changes_student1
+          - sensor.webuntis_changes_student2
   mode: single
