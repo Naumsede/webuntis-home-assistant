@@ -4,14 +4,14 @@ WebUntis → HA Sensor (Daily School Messages)
 Fetches today's school messages and outputs JSON for a command_line sensor.
 
 Note: WebUntis messages are only available via HTML scraping of the "Today" page.
-      The JSON-RPC API does NOT expose daily messages.
+The JSON-RPC API does NOT expose daily messages.
 
 Configuration:
-  Pass credentials as environment variables (recommended):
+    Pass credentials as environment variables (recommended):
     WEBUNTIS_USER, WEBUNTIS_PASSWORD, WEBUNTIS_SERVER, WEBUNTIS_SCHOOL
 
 Requirements:
-  pip3 install requests --break-system-packages
+    pip3 install requests --break-system-packages
 """
 import requests, json, sys, re, os
 from html import unescape
@@ -25,7 +25,7 @@ session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
 
 try:
-    login_page  = session.get(f"https://{SERVER}/WebUntis/")
+    login_page = session.get(f"https://{SERVER}/WebUntis/")
     token_match = re.search(r'name="token"\s+value="([^"]+)"', login_page.text)
     token = token_match.group(1) if token_match else ""
     session.post(
@@ -63,5 +63,6 @@ try:
 finally:
     try:
         session.post(f"https://{SERVER}/WebUntis/j_spring_security_logout")
+        session.close()
     except Exception:
         pass

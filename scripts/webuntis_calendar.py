@@ -5,35 +5,38 @@ Fetches current + next week timetable and writes it as an ICS file
 to a Home Assistant local calendar.
 
 Configuration:
-  Pass credentials as environment variables (recommended):
+    Pass credentials as environment variables (recommended):
     WEBUNTIS_USER, WEBUNTIS_PASSWORD, WEBUNTIS_SERVER, WEBUNTIS_SCHOOL
-  Set STUDENT_ID, ICS_PATH, CAL_ID, CAL_NAME in the YOUR CONFIGURATION section.
+    Set STUDENT_ID, ICS_PATH, CAL_ID, CAL_NAME in the YOUR CONFIGURATION section.
 
 Features:
-  - Dynamic time grid + tenant ID loaded from API
-  - Double lessons split into single periods (events > 120 min stay as one block)
-  - Invisible placeholder events up to the last lesson of the day
-  - Cancelled + replacement lessons at the same time merged into one event
-  - Stable UIDs based on WebUntis internal IDs
-  - VTIMEZONE block for correct DST handling
-  - Braille blank (U+2800) anchor on active subject for reliable CSS color matching
+    - Time grid loaded from API, with fallback derived from the timetable itself
+      (needed during holidays, when WebUntis reports no current school year)
+    - Tenant ID loaded from API
+    - Double lessons split into single periods (events > 120 min stay as one block)
+    - Invisible placeholder events up to the last lesson of the day
+    - Cancelled + replacement lessons at the same time merged into one event
+    - Lesson content (teachingContent) per single period via calendar-entry/detail
+    - Stable UIDs based on WebUntis internal IDs
+    - VTIMEZONE block for correct DST handling
+    - Braille blank (U+2800) anchor on active subject for reliable CSS color matching
 
 Requirements:
-  pip3 install requests --break-system-packages
+    pip3 install requests --break-system-packages
 """
 import requests, json, sys, re, hashlib, os
 from datetime import date, timedelta, datetime, timezone
 from collections import defaultdict
 
 # ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
-USERNAME   = os.getenv("WEBUNTIS_USER")     # set via environment variable
-PASSWORD   = os.getenv("WEBUNTIS_PASSWORD") # set via environment variable
-SERVER     = os.getenv("WEBUNTIS_SERVER")   # set via environment variable
-SCHOOL     = os.getenv("WEBUNTIS_SCHOOL")   # set via environment variable
-STUDENT_ID = 12345                          # from find_student_ids.py
+USERNAME   = os.getenv("WEBUNTIS_USER")      # set via environment variable
+PASSWORD   = os.getenv("WEBUNTIS_PASSWORD")  # set via environment variable
+SERVER     = os.getenv("WEBUNTIS_SERVER")    # set via environment variable
+SCHOOL     = os.getenv("WEBUNTIS_SCHOOL")    # set via environment variable
+STUDENT_ID = 12345                           # from find_student_ids.py
 ICS_PATH   = "/config/.storage/local_calendar.your_calendar.ics"
-CAL_ID     = "student1"                     # unique string for stable UIDs
-CAL_NAME   = "Timetable"                    # calendar display name
+CAL_ID     = "student1"                      # unique string for stable UIDs
+CAL_NAME   = "Timetable"                     # calendar display name
 # ─────────────────────────────────────────────────────────────────────────────
 
 DAYS_DE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
@@ -59,6 +62,14 @@ END:VTIMEZONE"""
 
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+
+# Set after login so the detail endpoint can be queried
+JWT       = None
+TENANT_ID = None
+
+# Cache for calendar-entry/detail responses. Used both for deriving the time
+# grid and for lesson content, so each lesson is requested only once.
+_DETAIL_CACHE = {}
 
 
 def stable_uid(key):
@@ -105,12 +116,113 @@ def ics_escape(s):
     return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
+def get_detail(start_iso, end_iso):
+    """
+    Fetch calendar-entry/detail for a time range (cached).
+    Returns the JSON dict, or an empty dict on any failure.
+    """
+    key = (start_iso[:19], end_iso[:19])
+    if key in _DETAIL_CACHE:
+        return _DETAIL_CACHE[key]
+    data = {}
+    if JWT is not None and TENANT_ID is not None:
+        try:
+            r = session.get(
+                f"https://{SERVER}/WebUntis/api/rest/view/v2/calendar-entry/detail",
+                params={
+                    "elementId":      str(STUDENT_ID),
+                    "elementType":    "5",
+                    "startDateTime":  key[0],
+                    "endDateTime":    key[1],
+                    "homeworkOption": "DUE",
+                },
+                headers={
+                    "Authorization": f"Bearer {JWT}",
+                    "Accept":        "application/json",
+                    "tenant-id":     TENANT_ID,
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                data = r.json()
+        except Exception:
+            data = {}
+    _DETAIL_CACHE[key] = data
+    return data
+
+
+def single_entry_spans(start_iso, end_iso):
+    """Return the single periods of a block as (start_min, end_min) tuples."""
+    spans = []
+    data = get_detail(start_iso, end_iso)
+    for ce in data.get("calendarEntries", []):
+        for se in ce.get("singleEntries", []):
+            s = se.get("startDateTime", "")
+            e = se.get("endDateTime", "")
+            if len(s) >= 16 and len(e) >= 16:
+                spans.append((to_min(s[11:16]), to_min(e[11:16])))
+    return spans
+
+
+def fetch_teaching_content(entry):
+    """Lesson content per single period: { "YYYY-MM-DDTHH:MM": "text", ... }"""
+    result = {}
+    data = get_detail(entry["start"], entry["end"])
+    for ce in data.get("calendarEntries", []):
+        for se in ce.get("singleEntries", []):
+            tc = (se.get("teachingContent") or "").strip()
+            if not tc:
+                continue
+            s = se.get("startDateTime", "")[:16]
+            if s:
+                result[s] = tc
+    return result
+
+
+def derive_periods(days):
+    """
+    Build the time grid from the timetable data itself.
+
+    Needed during holidays: WebUntis then reports currentSchoolYear = null, and
+    the /timegrid endpoint only returns a generic default grid (schoolyearId -1)
+    that does not match the real periods. Short entries are taken as single
+    periods, longer blocks are split via calendar-entry/detail.
+    """
+    slots = set()
+    for day in days:
+        for raw in day.get("gridEntries", []):
+            st = raw["duration"]["start"]
+            en = raw["duration"]["end"]
+            s_min, e_min = to_min(st[11:16]), to_min(en[11:16])
+            if e_min - s_min <= 0:
+                continue
+            if e_min - s_min <= 60:
+                slots.add((s_min, e_min))
+                continue
+            subs = single_entry_spans(st, en)
+            if subs:
+                for a, b in subs:
+                    if b > a:
+                        slots.add((a, b))
+            else:
+                slots.add((s_min, e_min))
+
+    # Drop blocks that fully contain other slots, otherwise the placeholder
+    # logic would count the same time twice.
+    result = []
+    for s, e in sorted(slots):
+        if any(s <= ps and pe <= e and (ps, pe) != (s, e) for ps, pe in slots):
+            continue
+        result.append((s, e))
+    return result
+
+
 def make_title(entry):
-    status            = entry["status"]
-    subject           = entry["subject"]
-    teacher_current   = entry["teacher"]
-    teacher_removed   = entry["teacher_removed"]
-    note              = entry.get("note", "")
+    status          = entry["status"]
+    subject         = entry["subject"]
+    teacher_current = entry["teacher"]
+    teacher_removed = entry["teacher_removed"]
+    note            = entry.get("note", "")
     cancelled_subject = entry.get("cancelled_subject", "")
 
     if status == "CANCELLED":
@@ -141,7 +253,7 @@ def make_title(entry):
     return f"{subject}{ANCHOR}"
 
 
-def make_description(entry):
+def make_description(entry, teaching_content=""):
     lines = []
     cancelled_subject = entry.get("cancelled_subject", "")
     if cancelled_subject and cancelled_subject != entry["subject"]:
@@ -158,6 +270,14 @@ def make_description(entry):
             lines.append(f"Room: {entry['room']}")
     if entry["note"]:
         lines.append(f"Note: {entry['note']}")
+    # Lesson content is appended to the last existing line (separated by spaces)
+    # instead of starting a new line, which keeps the card popup compact.
+    if teaching_content:
+        content = f"📖 {teaching_content}"
+        if lines:
+            lines[-1] = lines[-1] + "        " + content
+        else:
+            lines.append(content)
     return "\n".join(lines)
 
 
@@ -253,13 +373,22 @@ try:
         print(json.dumps({"status": "error", "error": "Invalid JWT token"}))
         sys.exit(1)
 
-    # Step 3: Load app data → tenant ID + time grid (dynamic)
-    app_data  = session.get(
+    # Step 3: Load app data → tenant ID + time grid
+    app_data = session.get(
         f"https://{SERVER}/WebUntis/api/rest/view/v1/app/data",
         headers={"Authorization": f"Bearer {jwt}", "Accept": "application/json"}
     ).json()
     tenant_id = app_data["tenant"]["id"]
-    PERIODS   = periods_from_units(app_data["currentSchoolYear"]["timeGrid"]["units"])
+
+    JWT       = jwt
+    TENANT_ID = str(tenant_id)
+
+    # During holidays currentSchoolYear is null - the grid is then derived
+    # from the timetable data further below.
+    PERIODS = []
+    school_year = app_data.get("currentSchoolYear")
+    if school_year and school_year.get("timeGrid"):
+        PERIODS = periods_from_units(school_year["timeGrid"]["units"])
 
     # Step 4: Fetch timetable (current + next week)
     today  = date.today()
@@ -288,7 +417,34 @@ try:
         print(json.dumps({"status": "error", "error": f"Timetable API returned {resp.status_code}"}))
         sys.exit(1)
 
-    data      = resp.json()
+    data = resp.json()
+    days = data.get("days", [])
+
+    # Holiday guard: if no lesson at all is returned, keep the existing ICS
+    # instead of overwriting it with an empty calendar.
+    total_entries = sum(len(d.get("gridEntries", [])) for d in days)
+    if total_entries == 0:
+        print(json.dumps({
+            "status":  "skipped",
+            "reason":  "no lessons in range (holidays)",
+            "changes": 0,
+            "events":  0,
+            "items":   [],
+        }, ensure_ascii=False))
+        sys.exit(0)
+
+    if not PERIODS:
+        PERIODS = derive_periods(days)
+    if not PERIODS:
+        print(json.dumps({
+            "status":  "skipped",
+            "reason":  "no time grid available",
+            "changes": 0,
+            "events":  0,
+            "items":   [],
+        }, ensure_ascii=False))
+        sys.exit(0)
+
     now_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     # Step 5: Build ICS
@@ -305,7 +461,7 @@ try:
     changes_count = 0
     changes_list  = []
 
-    for day in data.get("days", []):
+    for day in days:
         day_date = day["date"]
 
         raw_entries = [parse_entry(raw) for raw in day.get("gridEntries", [])]
@@ -340,11 +496,22 @@ try:
 
         # Real lessons
         for entry in entries:
-            title  = make_title(entry)
-            desc   = make_description(entry)
-            slots  = split_entry(entry, PERIODS)
+            title = make_title(entry)
+            slots = split_entry(entry, PERIODS)
+
+            # Lesson content per single period (one request per lesson, cached)
+            tc_map = fetch_teaching_content(entry)
 
             for start, end in slots:
+                slot_key = start[:16]
+                teaching = tc_map.get(slot_key, "")
+                # Fallback: if only one content is returned but the slot time
+                # does not match exactly, use the single available entry.
+                if not teaching and len(tc_map) == 1:
+                    teaching = next(iter(tc_map.values()))
+
+                desc = make_description(entry, teaching)
+
                 uid = stable_uid(str(entry["_ids"][0]) + "-" + CAL_ID if entry["_ids"] else start + "-" + CAL_ID)
                 ics_lines += [
                     "BEGIN:VEVENT",
