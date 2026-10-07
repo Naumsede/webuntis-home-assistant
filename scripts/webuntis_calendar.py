@@ -13,9 +13,12 @@ Features:
     - Time grid loaded from API, with fallback derived from the timetable itself
       (needed during holidays, when WebUntis reports no current school year)
     - Tenant ID loaded from API
-    - Double lessons split into single periods (events > 120 min stay as one block)
+    - Lessons always split into single periods (the card shows one tile per
+      event regardless of its duration)
     - Invisible placeholder events up to the last lesson of the day
-    - Cancelled + replacement lessons at the same time merged into one event
+    - Parallel groups with the same subject merged into one event
+    - Cancellations overlapping an active lesson are absorbed by it; each single
+      period shows the subject cancelled in exactly that period
     - Lesson content (teachingContent) per single period via calendar-entry/detail
     - Stable UIDs based on WebUntis internal IDs
     - VTIMEZONE block for correct DST handling
@@ -26,7 +29,6 @@ Requirements:
 """
 import requests, json, sys, re, hashlib, os
 from datetime import date, timedelta, datetime, timezone
-from collections import defaultdict
 
 # ── YOUR CONFIGURATION ────────────────────────────────────────────────────────
 USERNAME   = os.getenv("WEBUNTIS_USER")      # set via environment variable
@@ -96,12 +98,10 @@ def from_min(day_prefix, minutes):
 
 
 def split_entry(entry, periods):
-    """Split double lessons into single period slots. Events > 120 min stay as one block."""
+    """Split lessons into single period slots (one card tile per period)."""
     day   = entry["start"][:10]
     start = to_min(entry["start"][11:16])
     end   = to_min(entry["end"][11:16])
-    if end - start > 120:
-        return [(entry["start"], entry["end"])]
     slots = [(s, e) for s, e in periods if s >= start and e <= end]
     if not slots:
         return [(entry["start"], entry["end"])]
@@ -217,26 +217,34 @@ def derive_periods(days):
     return result
 
 
-def make_title(entry):
+def make_title(entry, cancelled=None):
+    """
+    Event title. `cancelled` overrides the entry's cancelled subjects, so each
+    single period can show only the subject cancelled in that period.
+    """
     status          = entry["status"]
     subject         = entry["subject"]
     teacher_current = entry["teacher"]
     teacher_removed = entry["teacher_removed"]
     note            = entry.get("note", "")
-    cancelled_subject = entry.get("cancelled_subject", "")
+    if cancelled is None:
+        cancelled = entry.get("cancelled_subjects", [])
+    cancelled = [c for c in cancelled if c != subject]
 
     if status == "CANCELLED":
         # ANCHOR ensures CSS subject color selector matches
         return f"❌ {subject}{ANCHOR}fällt aus"
 
-    if status == "CHANGED":
-        # If another lesson was cancelled at the same time, show it
-        if cancelled_subject and cancelled_subject != subject:
-            # New subject gets ANCHOR (triggers color), cancelled subject does not
-            title = f"⚠️ {subject}{ANCHOR}[statt: {cancelled_subject}]"
+    if status == "CHANGED" or cancelled:
+        # Exactly one cancelled subject fits into the tile. With several, the
+        # title would become unreadable - they go to the description instead.
+        # New subject gets ANCHOR (triggers color), cancelled subject does not.
+        if len(cancelled) == 1:
+            title = f"⚠️ {subject}{ANCHOR}[statt: {cancelled[0]}]"
         else:
             title = f"⚠️ {subject}{ANCHOR}"
-        # Teacher change in title (room change goes to LOCATION)
+        # Teacher change in title (room change goes to LOCATION).
+        # Not shown for merged parallel groups - see make_description.
         if teacher_removed and teacher_current != teacher_removed:
             ziel = teacher_current if teacher_current else "–"
             title += f": {teacher_removed}→{ziel}"
@@ -244,21 +252,23 @@ def make_title(entry):
             title += f" ({note})"
         return title
 
-    if status == "REGULAR" and cancelled_subject and cancelled_subject != subject:
-        title = f"⚠️ {subject}{ANCHOR}[statt: {cancelled_subject}]"
-        if note:
-            title += f" ({note})"
-        return title
-
     return f"{subject}{ANCHOR}"
 
 
-def make_description(entry, teaching_content=""):
+def make_description(entry, teaching_content="", cancelled=None):
     lines = []
-    cancelled_subject = entry.get("cancelled_subject", "")
-    if cancelled_subject and cancelled_subject != entry["subject"]:
-        lines.append(f"Replaces: {cancelled_subject}")
-    if entry["teacher"]:
+    if cancelled is None:
+        cancelled = entry.get("cancelled_subjects", [])
+    cancelled = [c for c in cancelled if c != entry["subject"]]
+    if len(cancelled) == 1:
+        lines.append(f"Replaces: {cancelled[0]}")
+    elif len(cancelled) > 1:
+        lines.append("Replaces: " + ", ".join(cancelled))
+
+    teacher_parts = entry.get("_teacher_parts", [])
+    if len(teacher_parts) > 1:
+        lines.append("Teacher: " + " / ".join(teacher_parts))
+    elif entry["teacher"]:
         if entry["teacher_removed"] and entry["teacher"] != entry["teacher_removed"]:
             lines.append(f"Teacher: {entry['teacher_removed']} → {entry['teacher']}")
         else:
@@ -318,38 +328,89 @@ def parse_entry(raw):
         "room_removed":     room_removed,
         "status":           raw.get("status", "REGULAR"),
         "note":             raw.get("substitutionText", "").strip(),
-        "cancelled_subject": "",
+        "cancelled_subjects": [],
+        "cancelled_entries": [],
+        "_teacher_parts":   [],
         "_ids":             raw.get("ids", []),
     }
 
 
+def teacher_label(entry):
+    """Teacher as text, with substitution hint: 'Vsk (statt Da)'."""
+    cur = entry["teacher"]
+    rem = entry["teacher_removed"]
+    if rem and cur and cur != rem:
+        return f"{cur} (statt {rem})"
+    if rem and not cur:
+        return f"– (statt {rem})"
+    return cur
+
+
 def merge_entries(entries):
     """
-    Group entries by start time. If a CANCELLED and another entry share the
-    same start time, merge them: the cancelled subject is stored in
-    cancelled_subject of the replacement entry, and the CANCELLED event is
-    dropped. This keeps the timetable grid clean.
+    Clean up the entries of one day:
+
+    1. Same time + same subject (parallel groups, e.g. swimming with two
+       teachers) are merged into one event; teachers and rooms are combined.
+    2. Cancellations that overlap an active lesson are absorbed by it - an
+       excursion spanning three periods replaces the three "fällt aus" tiles.
+       The cancelled entries are kept with their time range, so each single
+       period can later show the subject cancelled in exactly that period.
+    3. Different active subjects at the same time stay side by side
+       (genuine parallel courses).
     """
-    by_start = defaultdict(list)
-    for e in entries:
-        by_start[e["start"]].append(e)
+    active    = [e for e in entries if e["status"] != "CANCELLED"]
+    cancelled = [e for e in entries if e["status"] == "CANCELLED"]
 
-    result = []
-    for start_time, group in sorted(by_start.items()):
-        cancelled = [e for e in group if e["status"] == "CANCELLED"]
-        others    = [e for e in group if e["status"] != "CANCELLED"]
+    # 1. Merge parallel groups with the same subject
+    merged = []
+    by_key = {}
+    for e in active:
+        key = (e["start"], e["end"], e["subject"])
+        base = by_key.get(key)
+        if base is None:
+            e["_teacher_parts"] = [teacher_label(e)] if teacher_label(e) else []
+            by_key[key] = e
+            merged.append(e)
+            continue
 
-        if cancelled and others:
-            cancelled_subj = cancelled[0]["subject"]
-            for other in others:
-                other["cancelled_subject"] = cancelled_subj
-            result.extend(others)
-        elif cancelled and not others:
-            result.extend(cancelled)
-        else:
-            result.extend(others)
+        label = teacher_label(e)
+        if label and label not in base["_teacher_parts"]:
+            base["_teacher_parts"].append(label)
+        currents = [t for t in (base["teacher"], e["teacher"]) if t]
+        base["teacher"] = " / ".join(dict.fromkeys(currents))
+        # Several teachers: no arrow in the title (see make_title)
+        if len(base["_teacher_parts"]) > 1:
+            base["teacher_removed"] = ""
+        rooms = [r for r in (base["room"], e["room"]) if r]
+        base["room"] = " / ".join(dict.fromkeys(rooms))
+        if e["status"] == "CHANGED":
+            base["status"] = "CHANGED"
+        if e["note"] and e["note"] not in base["note"]:
+            base["note"] = "; ".join([x for x in (base["note"], e["note"]) if x])
+        base["_ids"] = list(base["_ids"]) + list(e["_ids"])
 
-    return result
+    # 2. Assign cancellations to the overlapping active lesson
+    for c in sorted(cancelled, key=lambda x: x["start"]):
+        c_s = to_min(c["start"][11:16])
+        c_e = to_min(c["end"][11:16])
+        best, best_overlap = None, 0
+        for a in merged:
+            a_s = to_min(a["start"][11:16])
+            a_e = to_min(a["end"][11:16])
+            overlap = min(a_e, c_e) - max(a_s, c_s)
+            if overlap > best_overlap:
+                best, best_overlap = a, overlap
+        if best is None:
+            # No replacement -> stays as its own "fällt aus" tile
+            merged.append(c)
+        elif c["subject"]:
+            if c["subject"] not in best["cancelled_subjects"]:
+                best["cancelled_subjects"].append(c["subject"])
+            best["cancelled_entries"].append(
+                {"start": c["start"], "end": c["end"], "subject": c["subject"]})
+
+    return sorted(merged, key=lambda e: (e["start"], e["subject"]))
 
 
 try:
@@ -510,7 +571,14 @@ try:
                 if not teaching and len(tc_map) == 1:
                     teaching = next(iter(tc_map.values()))
 
-                desc = make_description(entry, teaching)
+                # Subject cancelled in exactly this single period (time overlap)
+                s_min, e_min = to_min(start[11:16]), to_min(end[11:16])
+                slot_cancelled = [
+                    c["subject"] for c in entry.get("cancelled_entries", [])
+                    if min(to_min(c["end"][11:16]), e_min) - max(to_min(c["start"][11:16]), s_min) > 0
+                ]
+                slot_title = make_title(entry, slot_cancelled)
+                desc = make_description(entry, teaching, slot_cancelled)
 
                 uid = stable_uid(str(entry["_ids"][0]) + "-" + CAL_ID if entry["_ids"] else start + "-" + CAL_ID)
                 ics_lines += [
@@ -519,7 +587,7 @@ try:
                     f"DTSTAMP:{now_stamp}",
                     f"DTSTART;TZID=Europe/Berlin:{ics_dt(start)}",
                     f"DTEND;TZID=Europe/Berlin:{ics_dt(end)}",
-                    f"SUMMARY:{ics_escape(title)}",
+                    f"SUMMARY:{ics_escape(slot_title)}",
                 ]
                 # LOCATION: show room change if present, otherwise just room
                 if entry["room_removed"] and entry["room"] != entry["room_removed"]:
@@ -534,7 +602,7 @@ try:
                 ics_lines.append("END:VEVENT")
                 event_count += 1
 
-            if entry["status"] != "REGULAR" or entry.get("cancelled_subject"):
+            if entry["status"] != "REGULAR" or entry.get("cancelled_subjects"):
                 changes_count += 1
                 day_dt  = date.fromisoformat(entry["start"][:10])
                 day_str = f"{DAYS_DE[day_dt.weekday()]} {day_dt.strftime('%d.%m.')}"
