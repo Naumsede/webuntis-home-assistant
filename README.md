@@ -27,8 +27,9 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
 - 📅 Full weekly timetable written to a local HA calendar (ICS)
 - ⚠️ Teacher substitutions in the title
 - ❌ Cancellations with strikethrough styling
-- 🔀 Cancelled + replacement lessons at the same time merged into one event
-  (e.g. `⚠️ Deutsch [statt: Musik] (Aufgabe Ko)`)
+- 🔀 Smart merging: replacement lessons absorb overlapping cancellations
+  (e.g. `⚠️ Deutsch [statt: Musik]`), parallel groups with the same subject
+  become one event
 - 🏫 Room changes shown in the location line (`[MS2]→043`)
 - 📖 Lesson content (`teachingContent`) per single period in the description
 - 📢 Daily school messages as an HA sensor
@@ -148,6 +149,32 @@ directly after the *active* subject. The CSS selectors match `Subject⠀`
 (with the anchor), so only the active subject is colored — the cancelled subject
 in brackets has no anchor and is ignored. The Braille blank survives copy/paste
 in editors, unlike a zero-width space.
+
+---
+
+## Notes on merging
+
+WebUntis often returns several entries for the same time slot. Shown 1:1,
+the card fills up with duplicates and struck-through tiles. The script cleans
+up each day with three rules:
+
+1. **Same subject, same time → one event.** Parallel groups (e.g. swimming with
+   two teachers) are merged; teachers are combined in the description
+   (`Teacher: Vsk (statt Da) / Tr`).
+2. **Cancellations overlapping an active lesson are absorbed.** An excursion
+   from 09:40 to 12:15 replaces the three cancelled lessons beneath it instead
+   of standing next to three "fällt aus" tiles. The lesson is split into single
+   periods, and each tile shows the subject cancelled in exactly that period:
+   `[statt: Deutsch]`, `[statt: Mathematik]`, `[statt: Englisch]`.
+3. **Different active subjects at the same time stay separate.** These are
+   genuine parallel courses (e.g. religion groups), not duplicates.
+
+A cancellation with nothing overlapping it stays visible as its own
+`❌ … fällt aus` tile.
+
+Lessons are always split into single periods, because the week-planner-card
+renders one tile per event regardless of its duration — a single long event
+would look like one short lesson.
 
 ---
 
