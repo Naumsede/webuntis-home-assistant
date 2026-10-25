@@ -17,6 +17,10 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
 | Lesson cancellation | ✅ | ✅ |
 | Room changes | ✅ | ✅ with old → new room |
 | Lesson content (Lehrstoff) | ❌ | ✅ per single period |
+| Full teacher names | ❌ | ✅ "Doe, Jane" in the description |
+| Event info (meeting point, time) | ❌ | ✅ |
+| Lesson type (additional lesson / event) | ❌ | ✅ |
+| Holidays | ❌ | ✅ as all-day events |
 | Daily school messages | ❌ | ✅ |
 | Dynamic time grid | ❌ | ✅ loaded from API |
 
@@ -32,6 +36,12 @@ The official [homeassistant-WebUntis](https://github.com/JonasJoKuJonas/homeassi
   become one event
 - 🏫 Room changes shown in the location line (`[MS2]→043`)
 - 📖 Lesson content (`teachingContent`) per single period in the description
+- 👩‍🏫 Short teacher names in the title (`Ab→Cd`), full names in the
+  description (`Teacher: Doe, Jane → Roe, John`)
+- 📌 Lesson type in the description (`Additional lesson`, `Event`)
+- ℹ️ Event info and extra texts in the description (e.g. meeting point and
+  start time of an excursion, "Bitte Notenkarten mitbringen!")
+- 🏖️ Holidays (e.g. `Herbstferien`) as all-day events
 - 📢 Daily school messages as an HA sensor
 - 🔔 Push notifications on genuinely new changes / messages only (no duplicates)
 - 🕐 Dynamic time grid loaded from API, with fallback derived from the timetable
@@ -90,7 +100,23 @@ GET /WebUntis/api/rest/view/v2/calendar-entry/detail
     &startDateTime=<iso>&endDateTime=<iso>&homeworkOption=DUE
 ```
 Returns `calendarEntries[].singleEntries[]` with `teachingContent` and the exact
-start/end time of each single period.
+start/end time of each single period. Each calendar entry also carries
+`lessonInfo` (event info) and `substText` (substitution text).
+
+Useful fields of a timetable entry (`days[].gridEntries[]`):
+
+| Field | Content |
+|---|---|
+| `position1` / `position2` / `position3` | teacher / subject / room, each with `shortName` and `longName` (`current` and `removed`) |
+| `type` | `NORMAL_TEACHING_PERIOD`, `ADDITIONAL_PERIOD`, `EVENT` |
+| `lessonInfo` | event info, e.g. meeting point and start time |
+| `substitutionText`, `texts[]` | substitution / extra texts |
+
+Holidays are returned per day in `days[].backEntries[]` with `type: HOLIDAY`
+and the name in `longName`.
+
+Homework and exams (`/api/homeworks/lessons`, `/api/exams`) may be blocked for
+student/parent accounts depending on the school's settings (HTTP 403).
 
 **Daily school messages:**
 ```
