@@ -47,6 +47,8 @@ texts:
   tomorrow: tomorrow
   yesterday: yesterday
   noEvents: no school
+  # Hides the "Entire day" label on all-day events (e.g. holidays)
+  fullDay: " "
 card_mod:
   style: >
     ha-card {
