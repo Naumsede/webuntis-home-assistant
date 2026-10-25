@@ -23,6 +23,10 @@ Features:
     - Stable UIDs based on WebUntis internal IDs
     - VTIMEZONE block for correct DST handling
     - Braille blank (U+2800) anchor on active subject for reliable CSS color matching
+    - Short teacher names in the title, full names in the description
+    - Lesson type (additional lesson / event), event info and extra texts
+      in the description
+    - Holidays as all-day events
 
 Requirements:
     pip3 install requests --break-system-packages
@@ -179,6 +183,21 @@ def fetch_teaching_content(entry):
     return result
 
 
+def fetch_entry_texts(entry):
+    """
+    Event info (lessonInfo) and substitution texts (substText) from
+    calendar-entry/detail. Uses the detail cache, so no extra request.
+    """
+    texts = []
+    data = get_detail(entry["start"], entry["end"])
+    for ce in data.get("calendarEntries", []):
+        for key in ("lessonInfo", "substText"):
+            t = (ce.get(key) or "").strip()
+            if t and t not in texts:
+                texts.append(t)
+    return texts
+
+
 def derive_periods(days):
     """
     Build the time grid from the timetable data itself.
@@ -224,8 +243,9 @@ def make_title(entry, cancelled=None):
     """
     status          = entry["status"]
     subject         = entry["subject"]
-    teacher_current = entry["teacher"]
-    teacher_removed = entry["teacher_removed"]
+    # Title uses the short teacher names to keep the tile compact
+    teacher_current = entry.get("teacher_s", entry["teacher"])
+    teacher_removed = entry.get("teacher_removed_s", entry["teacher_removed"])
     note            = entry.get("note", "")
     if cancelled is None:
         cancelled = entry.get("cancelled_subjects", [])
@@ -255,8 +275,17 @@ def make_title(entry, cancelled=None):
     return f"{subject}{ANCHOR}"
 
 
+TYPE_LABELS = {
+    "ADDITIONAL_PERIOD": "Additional lesson",
+    "EVENT":             "Event",
+}
+
+
 def make_description(entry, teaching_content="", cancelled=None):
     lines = []
+    type_label = TYPE_LABELS.get(entry.get("lesson_type", ""))
+    if type_label:
+        lines.append(f"📌 {type_label}")
     if cancelled is None:
         cancelled = entry.get("cancelled_subjects", [])
     cancelled = [c for c in cancelled if c != entry["subject"]]
@@ -280,6 +309,8 @@ def make_description(entry, teaching_content="", cancelled=None):
             lines.append(f"Room: {entry['room']}")
     if entry["note"]:
         lines.append(f"Note: {entry['note']}")
+    for hint in entry.get("_hints", []):
+        lines.append(f"ℹ️ {hint}")
     # Lesson content is appended to the last existing line (separated by spaces)
     # instead of starting a new line, which keeps the card popup compact.
     if teaching_content:
@@ -298,12 +329,17 @@ def parse_entry(raw):
             subject = p["current"].get("longName", p["current"].get("shortName", ""))
         break
 
+    # Full teacher name (e.g. "Doe, Jane") for the description,
+    # short name (e.g. "Do") for the event title
     teacher_current, teacher_removed = "", ""
+    teacher_current_s, teacher_removed_s = "", ""
     for p in (raw.get("position1") or []):
         if p.get("current"):
-            teacher_current = p["current"].get("shortName", "")
+            teacher_current_s = p["current"].get("shortName", "")
+            teacher_current = p["current"].get("longName") or teacher_current_s
         if p.get("removed"):
-            teacher_removed = p["removed"].get("shortName", "")
+            teacher_removed_s = p["removed"].get("shortName", "")
+            teacher_removed = p["removed"].get("longName") or teacher_removed_s
         break
 
     room_current, room_removed = "", ""
@@ -324,6 +360,8 @@ def parse_entry(raw):
         "subject":          subject,
         "teacher":          teacher_current,
         "teacher_removed":  teacher_removed,
+        "teacher_s":        teacher_current_s,
+        "teacher_removed_s": teacher_removed_s,
         "room":             room_current,
         "room_removed":     room_removed,
         "status":           raw.get("status", "REGULAR"),
@@ -332,6 +370,15 @@ def parse_entry(raw):
         "cancelled_entries": [],
         "_teacher_parts":   [],
         "_ids":             raw.get("ids", []),
+        # Lesson type: NORMAL_TEACHING_PERIOD / ADDITIONAL_PERIOD / EVENT
+        "lesson_type":      raw.get("type") or "",
+        # Info for the lesson/event (e.g. meeting point, start time)
+        "lesson_info":      (raw.get("lessonInfo") or "").strip(),
+        # Additional texts (e.g. "Bitte Notenkarten mitbringen!")
+        "texts":            [(t.get("text") or "").strip()
+                             for t in (raw.get("texts") or [])
+                             if (t.get("text") or "").strip()],
+        "_hints":           [],
     }
 
 
@@ -379,9 +426,12 @@ def merge_entries(entries):
             base["_teacher_parts"].append(label)
         currents = [t for t in (base["teacher"], e["teacher"]) if t]
         base["teacher"] = " / ".join(dict.fromkeys(currents))
+        currents_s = [t for t in (base.get("teacher_s", ""), e.get("teacher_s", "")) if t]
+        base["teacher_s"] = " / ".join(dict.fromkeys(currents_s))
         # Several teachers: no arrow in the title (see make_title)
         if len(base["_teacher_parts"]) > 1:
             base["teacher_removed"] = ""
+            base["teacher_removed_s"] = ""
         rooms = [r for r in (base["room"], e["room"]) if r]
         base["room"] = " / ".join(dict.fromkeys(rooms))
         if e["status"] == "CHANGED":
@@ -389,6 +439,11 @@ def merge_entries(entries):
         if e["note"] and e["note"] not in base["note"]:
             base["note"] = "; ".join([x for x in (base["note"], e["note"]) if x])
         base["_ids"] = list(base["_ids"]) + list(e["_ids"])
+        if e["lesson_info"] and e["lesson_info"] not in base["lesson_info"]:
+            base["lesson_info"] = "; ".join([x for x in (base["lesson_info"], e["lesson_info"]) if x])
+        base["texts"] = list(base["texts"]) + [t for t in e["texts"] if t not in base["texts"]]
+        if base["lesson_type"] in ("", "NORMAL_TEACHING_PERIOD"):
+            base["lesson_type"] = e["lesson_type"]
 
     # 2. Assign cancellations to the overlapping active lesson
     for c in sorted(cancelled, key=lambda x: x["start"]):
@@ -525,6 +580,26 @@ try:
     for day in days:
         day_date = day["date"]
 
+        # Holidays as all-day events (Mon-Fri only)
+        day_dt_obj = date.fromisoformat(day_date[:10])
+        if day_dt_obj.weekday() < 5:
+            for be in day.get("backEntries", []) or []:
+                if be.get("type") != "HOLIDAY":
+                    continue
+                name = (be.get("longName") or be.get("shortName") or "Holiday").strip()
+                d0 = day_dt_obj.strftime("%Y%m%d")
+                d1 = (day_dt_obj + timedelta(days=1)).strftime("%Y%m%d")
+                ics_lines += [
+                    "BEGIN:VEVENT",
+                    f"UID:{stable_uid(d0 + '-holiday-' + str(be.get('id', '')) + '-' + CAL_ID)}",
+                    f"DTSTAMP:{now_stamp}",
+                    f"DTSTART;VALUE=DATE:{d0}",
+                    f"DTEND;VALUE=DATE:{d1}",
+                    f"SUMMARY:{ics_escape(name)}",
+                    "END:VEVENT",
+                ]
+                event_count += 1
+
         raw_entries = [parse_entry(raw) for raw in day.get("gridEntries", [])]
         entries = merge_entries(raw_entries)
 
@@ -562,6 +637,14 @@ try:
 
             # Lesson content per single period (one request per lesson, cached)
             tc_map = fetch_teaching_content(entry)
+
+            # Event info and extra texts from timetable + detail, no duplicates
+            hints = []
+            for t in [entry["lesson_info"]] + entry["texts"] + fetch_entry_texts(entry):
+                t = t.strip()
+                if t and t not in hints and t not in entry["note"]:
+                    hints.append(t)
+            entry["_hints"] = hints
 
             for start, end in slots:
                 slot_key = start[:16]
